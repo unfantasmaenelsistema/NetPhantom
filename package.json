@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "start": "tsx server.ts",
     "clean": "rimraf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "tsx --test src/utils/htmlEscape.test.ts src/utils/scenarioIo.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

@@ -1,13 +1,5 @@
 import { CTFScenario } from '../types';
-
-function escapeHtml(text: string): string {
-  return String(text)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
+import { escapeHtml } from './htmlEscape';
 
 export interface CertificateData {
   studentName: string;

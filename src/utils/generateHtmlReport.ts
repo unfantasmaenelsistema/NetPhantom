@@ -1,15 +1,7 @@
 import { CTFScenario } from '../types';
 import { getScenarioFrameworks } from './frameworksHelper';
 import { calculateCVSS31, inferCVSSVector } from './cvssCalculator';
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
+import { escapeHtml } from './htmlEscape';
 
 function formatInlineMarkdown(text: string): string {
   let res = escapeHtml(text);
@@ -1249,8 +1241,8 @@ export function generateHtmlReport(scenario: CTFScenario): string {
           Para aprovisionar y levantar el laboratorio en cualquier entorno compatible con Docker:
         </p>
         <pre><code># 1. Descomprimir el paquete del laboratorio
-unzip lab_${(scenario.codename || 'ctf').toLowerCase()}_completo.zip
-cd lab_${(scenario.codename || 'ctf').toLowerCase()}
+unzip lab_${code.toLowerCase()}_completo.zip
+cd lab_${code.toLowerCase()}
 
 # 2. Levantar el laboratorio en segundo plano
 docker compose up --build -d

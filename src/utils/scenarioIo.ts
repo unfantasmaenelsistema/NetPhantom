@@ -179,7 +179,6 @@ export function validateAndParseScenario(content: string, fileName: string = '')
     }
 
     let parsed: any;
-    const looksYaml = fileName.endsWith('.yaml') || fileName.endsWith('.yml');
 
     try {
       parsed = JSON.parse(trimmed);
@@ -190,7 +189,6 @@ export function validateAndParseScenario(content: string, fileName: string = '')
         return { error: `No se pudo interpretar el archivo como JSON ni YAML: ${yamlErr.message || yamlErr}` };
       }
     }
-    void looksYaml;
 
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return { error: 'El formato del archivo no es un objeto JSON o YAML válido.' };
