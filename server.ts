@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 import { rateLimit } from 'express-rate-limit';
+import { findDockerComposeSecurityIssues } from './src/utils/dockerSecurity';
 
 dotenv.config();
 
@@ -1159,16 +1160,17 @@ Return a valid JSON object strictly matching this TypeScript structure:
     { "id": "h5", "level": 2, "title": "Herramienta de Auditoría Local", "category": "privesc", "text": "Comando o ruta del sistema clave para inspeccionar." },
     { "id": "h6", "level": 3, "title": "Vector de Root", "category": "privesc", "text": "Técnica precisa de elevación de privilegios." }
   ],
-  "provisionScript": "#!/usr/bin/env bash\\n# Complete bash setup script with comments...\\n",
-  "dockerfile": "FROM debian:12-slim\\n# Complete runnable Dockerfile...\\n",
-  "dockerCompose": "version: '3.8'\\nservices:\\n  vulnerable_node:\\n    build: .\\n    container_name: ctf_target\\n    hostname: ctf_target\\n    ports:\\n      - '8080:80'\\n      - '2222:22'\\n    networks:\\n      ctf_isolated_net:\\n        ipv4_address: 10.10.110.42\\n    restart: unless-stopped\\nnetworks:\\n  ctf_isolated_net:\\n    driver: bridge\\n    ipam:\\n      config:\\n        - subnet: 10.10.110.0/24\\n",
+  "provisionScript": "#!/usr/bin/env bash\\n# Complete bash setup script with comments. Must end by exec-ing (or otherwise keeping alive) the actual vulnerable service/process so the container does not exit immediately.\\n",
+  "dockerfile": "FROM debian:12-slim\\n# Complete runnable Dockerfile that actually installs and starts the vulnerable service described in openPorts...\\n",
+  "dockerCompose": "version: '3.8'\\nservices:\\n  vulnerable_node:\\n    build: .\\n    container_name: ctf_target\\n    hostname: ctf_target\\n    ports:\\n      - '127.0.0.1:8080:80'\\n    networks:\\n      ctf_isolated_net:\\n        ipv4_address: 10.10.110.42\\n    cap_drop: ['ALL']\\n    security_opt: ['no-new-privileges:true']\\n    deploy:\\n      resources:\\n        limits:\\n          cpus: '1.0'\\n          memory: 1024M\\nnetworks:\\n  ctf_isolated_net:\\n    driver: bridge\\n    ipam:\\n      config:\\n        - subnet: 10.10.110.0/24\\n",
   "walkthrough": "# Complete Markdown writeup detailing Recon, Initial Foothold, Privilege Escalation, and Mitigation/Hardening Guidance."
 }
 
 CRITICAL RULES:
 1. Provide at least 6 gradual hints: 3 for initial foothold (Level 1 subtle, Level 2 tactical, Level 3 direct vector) and 3 for privilege escalation.
-2. The docker-compose.yml must be completely runnable with 'docker compose up' or 'docker-compose up', defining isolated bridge network 'ctf_isolated_net' and container name.
-3. Return ONLY pure JSON.
+2. The docker-compose.yml must be completely runnable with 'docker compose up' or 'docker-compose up', defining isolated bridge network 'ctf_isolated_net' and container name. Every port listed in openPorts MUST be backed by a real, running service in the Dockerfile/provisionScript — never advertise a port that nothing is listening on.
+3. Docker security (non-negotiable, these are hard-rejected server-side if violated): NEVER use 'privileged: true', 'network_mode: host', 'pid: host', 'ipc: host', or mount host paths/the Docker socket as volumes. Bind every published port to 127.0.0.1 (e.g. '127.0.0.1:8080:80'), never '0.0.0.0' or a bare port. Always set 'cap_drop: [ALL]'. Only add 'security_opt: [no-new-privileges:true]' and avoid any 'cap_add' when the privilege-escalation vector does NOT depend on SUID/SGID binaries or sudo; when it DOES (e.g. the secondary vector is SUID/Path Hijacking, sudo NOPASSWD, or a capability like cap_setuid), omit 'no-new-privileges' entirely and instead add only the minimal capabilities the exploit needs via 'cap_add' (choose only from: CHOWN, DAC_OVERRIDE, FOWNER, FSETID, KILL, SETGID, SETUID, SETPCAP, SETFCAP, NET_BIND_SERVICE, SYS_CHROOT, AUDIT_WRITE) — never 'ALL' or capabilities like SYS_ADMIN/SYS_PTRACE/SYS_MODULE/NET_ADMIN. Always set resource limits (deploy.resources.limits.cpus and memory).
+4. Return ONLY pure JSON.
 `;
 
     let generatedData: any = null;
@@ -1196,6 +1198,15 @@ CRITICAL RULES:
       const responseText = response.text || '';
       const cleanJson = responseText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
       generatedData = JSON.parse(cleanJson);
+
+      // Nunca se confía a ciegas en el docker-compose que devuelve la IA: si
+      // pide privileged/host networking/montar rutas del host/capabilities
+      // peligrosas, se rechaza la generación completa y se cae al catálogo
+      // offline en vez de servir una configuración insegura.
+      const composeIssues = findDockerComposeSecurityIssues(generatedData?.dockerCompose);
+      if (composeIssues.length > 0) {
+        throw new Error(`El docker-compose generado por la IA fue rechazado por seguridad: ${composeIssues.join(' ')}`);
+      }
     } catch (apiError: any) {
       usedFallback = true;
       fallbackReason = apiKeyConfigured
@@ -1318,6 +1329,8 @@ services:
     networks:
       ctf_isolated_net:
         ipv4_address: ${preset.ip}
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
     deploy:
       resources:
         limits:

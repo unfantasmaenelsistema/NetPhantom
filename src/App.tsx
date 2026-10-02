@@ -248,6 +248,15 @@ EXPOSE 80
 
 CMD ["/app/provision.sh"]
 `,
+  // Nota de seguridad: NO se aplica cap_drop:[ALL] ni
+  // security_opt:[no-new-privileges:true] en este laboratorio en concreto
+  // porque su reto de escalada de privilegios depende explícitamente de un
+  // binario SUID (system-diag). "no-new-privileges" desactiva por completo
+  // ese mecanismo del kernel y rompería el ejercicio; cap_drop:[ALL] además
+  // dejaría sin capacidades el "apt-get install" que corre el
+  // provisionScript al arrancar el contenedor. Si quieres endurecerlo más,
+  // valida primero en un entorno con Docker que el flujo SUID sigue
+  // funcionando con el cap_add mínimo que necesites.
   dockerCompose: `version: '3.8'
 
 services:
@@ -261,6 +270,11 @@ services:
       ctf_net:
         ipv4_address: 10.10.110.42
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
 
 networks:
   ctf_net:

@@ -128,9 +128,21 @@ Una vez diseñado o seleccionado un escenario en NetPhantom:
 
 ## 🔒 Arquitectura de Seguridad
 
-* **Sin claves en el frontend**: Siguiendo las directrices estrictas de seguridad de Google y OWASP, la clave API nunca se expone en la interfaz web ni en el almacenamiento del navegador del cliente (`localStorage`/`cookies`).
-* **Proxy de Servidor Seguro**: Todas las solicitudes a la IA se gestionan mediante rutas del backend (`/api/*`), manteniendo tus secretos a salvo de extensiones de navegador y ataques de inspección.
-* **Aislamiento de Contenedores**: Todos los entornos CTF se definen en redes puente (`bridge`) aisladas sin privilegios de red sobre tu máquina anfitriona.
+Esta sección describe **solo lo que el código garantiza hoy**, no aspiraciones. Si encuentras algo que no se cumple, abre un issue.
+
+* **Sin claves en el frontend**: la clave de Gemini solo vive en tu `.env` local y en el proceso del servidor; nunca se envía al navegador ni se guarda en `localStorage`/`cookies`. Todas las llamadas a la IA pasan por rutas del backend (`/api/*`).
+* **Servidor local, no expuesto por defecto**: el servidor escucha en `127.0.0.1` (localhost) salvo que fijes explícitamente `HOST=0.0.0.0` en tu `.env` — algo que la app nunca necesita para su uso normal.
+* **Límites básicos de abuso**: el tamaño del body JSON está limitado (`MAX_BODY_SIZE`, 1 MB por defecto) y las rutas que llaman a Gemini (`/api/generate-scenario`, `/api/chat`, `/api/generate-machine-art`) aplican un límite de peticiones por IP (20/min). Esto es una protección básica para uso local, no un WAF ni defensa frente a tráfico adversarial a gran escala.
+* **Exportaciones e importaciones saneadas**: los informes HTML, el certificado y los escenarios `.json`/`.yaml` importados escapan los valores dinámicos (nombre del alumno, banderas, pistas...) antes de inyectarlos en HTML, para evitar XSS al abrir un informe exportado o al importar un reto compartido por otra persona.
+* **Validación del `docker-compose.yml` generado o importado**: tanto la salida de Gemini como cualquier `.json`/`.yaml` que importes pasan por un validador (`src/utils/dockerSecurity.ts`) que rechaza `privileged: true`, `network_mode`/`pid`/`ipc: host`, montar rutas del host (incluido `/var/run/docker.sock`) y capabilities (`cap_add`) fuera de una lista mínima permitida. Si algo no pasa la validación, se sustituye por una plantilla segura (o se descarta la respuesta de la IA y se usa el catálogo offline) en vez de servir una configuración peligrosa.
+* **Puertos de laboratorio en localhost**: los `docker-compose.yml` que genera NetPhantom publican los puertos como `127.0.0.1:HOST:CONTENEDOR`, no `0.0.0.0`, así que las máquinas vulnerables no quedan expuestas a tu red local salvo que lo cambies tú mismo a propósito.
+
+### ⚠️ Lo que esta app NO garantiza
+
+* **Las máquinas CTF son deliberadamente vulnerables.** Están pensadas para ejecutarse en local, con Docker, en una máquina que tú controlas — nunca en un servidor compartido, en producción, ni accesible desde Internet.
+* No hay aislamiento reforzado tipo sandbox/gVisor/Kata frente a un *container breakout* sofisticado: la contención es la que ofrece Docker por defecto más los límites de capacidades que NetPhantom añade (`cap_drop: [ALL]` + el mínimo `cap_add` necesario cuando el reto lo exige), no una barrera infranqueable.
+* El rate limiting y el límite de body son una protección básica pensada para un único usuario local, no para exponer el servicio a terceros.
+* El certificado de superación es **autoemitido y generado en tu navegador**: no es una acreditación oficial ni de terceros (ver el propio diploma, que ya lo indica).
 
 ---
 

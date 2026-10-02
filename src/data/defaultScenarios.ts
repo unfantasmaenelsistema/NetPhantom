@@ -165,6 +165,10 @@ COPY provision.sh /app/provision.sh
 RUN chmod +x /app/provision.sh
 EXPOSE 80
 CMD ["/app/provision.sh"]`,
+    // Nota de seguridad: sin cap_drop/no-new-privileges aquí a propósito -
+    // el reto depende de un binario SUID (system-diag) y de un
+    // "apt-get install" en el arranque del contenedor; ver el comentario
+    // gemelo en App.tsx (INITIAL_SCENARIO) para el detalle completo.
     dockerCompose: `version: '3.8'
 services:
   ctf_target:
@@ -176,6 +180,11 @@ services:
     networks:
       ctf_isolated_net:
         ipv4_address: 10.10.110.42
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
 networks:
   ctf_isolated_net:
     driver: bridge

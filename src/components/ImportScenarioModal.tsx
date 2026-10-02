@@ -29,6 +29,7 @@ export const ImportScenarioModal: React.FC<ImportScenarioModalProps> = ({
   const [rawText, setRawText] = useState('');
   const [fileName, setFileName] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [previewScenario, setPreviewScenario] = useState<CTFScenario | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -37,6 +38,7 @@ export const ImportScenarioModal: React.FC<ImportScenarioModalProps> = ({
 
   const handleProcessContent = (content: string, name: string) => {
     setErrorMsg(null);
+    setWarnings([]);
     const result = validateAndParseScenario(content, name);
     if (result.error) {
       setErrorMsg(result.error);
@@ -44,6 +46,9 @@ export const ImportScenarioModal: React.FC<ImportScenarioModalProps> = ({
     } else if (result.scenario) {
       setPreviewScenario(result.scenario);
       setFileName(name || 'escenario_personalizado');
+      if (result.warnings && result.warnings.length > 0) {
+        setWarnings(result.warnings);
+      }
     }
   };
 
@@ -192,6 +197,22 @@ export const ImportScenarioModal: React.FC<ImportScenarioModalProps> = ({
             <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-800/60 flex items-start gap-2.5 text-xs text-rose-300">
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
               <span>{errorMsg}</span>
+            </div>
+          )}
+
+          {/* Security warnings: parts of the imported file were replaced with
+              safe defaults instead of trusted as-is (see scenarioIo.ts). */}
+          {warnings.length > 0 && (
+            <div className="p-4 rounded-xl bg-amber-950/30 border border-amber-800/60 space-y-1.5 animate-in fade-in duration-150">
+              <div className="flex items-center gap-2 text-amber-400 font-semibold text-xs">
+                <AlertCircle className="w-4 h-4" />
+                <span>Avisos de seguridad en la importación</span>
+              </div>
+              {warnings.map((w, i) => (
+                <p key={i} className="text-xs text-amber-300 leading-relaxed">
+                  {w}
+                </p>
+              ))}
             </div>
           )}
 

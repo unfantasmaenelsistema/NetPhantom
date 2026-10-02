@@ -9,10 +9,15 @@ import {
   OwaspCategory,
   ScenarioTopology,
 } from '../types';
+import { findDockerComposeSecurityIssues } from './dockerSecurity';
+
+const SAFE_DEFAULT_DOCKER_COMPOSE = `version: '3.8'\nservices:\n  target:\n    image: python:3.11-slim\n    ports:\n      - "127.0.0.1:8080:80"\n`;
 
 export interface ParseResult {
   scenario?: CTFScenario;
   error?: string;
+  /** Avisos no bloqueantes (p.ej. se sustituyó un docker-compose inseguro). */
+  warnings?: string[];
 }
 
 // Límites defensivos de longitud. Cualquier .json/.yaml importado (p.ej. compartido
@@ -206,6 +211,19 @@ export function validateAndParseScenario(content: string, fileName: string = '')
 
     const ip = str(parsed.ip, MAX_SHORT, '10.10.110.42');
 
+    // Un docker-compose.yml importado nunca se confía a ciegas: si pide
+    // privileged/host networking/montar rutas del host/capabilities
+    // peligrosas, se sustituye por una plantilla segura y se avisa.
+    const warnings: string[] = [];
+    const importedCompose = optStr(parsed.dockerCompose, MAX_LONG);
+    const composeIssues = importedCompose ? findDockerComposeSecurityIssues(importedCompose) : [];
+    const dockerCompose = composeIssues.length > 0 ? SAFE_DEFAULT_DOCKER_COMPOSE : importedCompose || SAFE_DEFAULT_DOCKER_COMPOSE;
+    if (composeIssues.length > 0) {
+      warnings.push(
+        `Se ignoró el docker-compose.yml importado por configuración insegura y se sustituyó por una plantilla segura: ${composeIssues.join(' ')}`
+      );
+    }
+
     // Build guaranteed, sanitized CTFScenario. Every string is type- and
     // length-checked; nothing from the imported file is trusted as-is.
     const scenario: CTFScenario = {
@@ -236,11 +254,7 @@ export function validateAndParseScenario(content: string, fileName: string = '')
       topology: sanitizeTopology(parsed.topology, ip),
       provisionScript: str(parsed.provisionScript, MAX_LONG, '#!/bin/bash\necho "Provisioning custom scenario..."\n'),
       dockerfile: str(parsed.dockerfile, MAX_LONG, 'FROM python:3.11-slim\nWORKDIR /app\nCMD ["python3", "-m", "http.server", "80"]\n'),
-      dockerCompose: str(
-        parsed.dockerCompose,
-        MAX_LONG,
-        `version: '3.8'\nservices:\n  target:\n    image: python:3.11-slim\n    ports:\n      - "127.0.0.1:8080:80"\n`
-      ),
+      dockerCompose,
       pythonScript: str(parsed.pythonScript, MAX_LONG, '#!/usr/bin/env python3\nimport requests\nprint("Custom scenario exploit script")\n'),
       walkthrough: str(parsed.walkthrough, MAX_LONG, '## Guía de Solución\n\n1. Reconocimiento y escaneo.\n2. Explotación y escalada.\n'),
       hints:
@@ -256,7 +270,7 @@ export function validateAndParseScenario(content: string, fileName: string = '')
       cvss: sanitizeCvss(parsed.cvss),
     };
 
-    return { scenario };
+    return warnings.length > 0 ? { scenario, warnings } : { scenario };
   } catch (err: any) {
     return { error: `Error procesando el archivo: ${err.message || String(err)}` };
   }
