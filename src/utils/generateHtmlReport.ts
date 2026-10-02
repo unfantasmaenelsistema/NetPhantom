@@ -1,15 +1,7 @@
 import { CTFScenario } from '../types';
 import { getScenarioFrameworks } from './frameworksHelper';
 import { calculateCVSS31, inferCVSSVector } from './cvssCalculator';
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
+import { escapeHtml } from './htmlEscape';
 
 function formatInlineMarkdown(text: string): string {
   let res = escapeHtml(text);
@@ -157,13 +149,13 @@ export function formatMarkdownToHtml(markdown: string): string {
 }
 
 export function generateHtmlReport(scenario: CTFScenario): string {
-  const code = scenario.codename || 'CTF_LAB';
-  const theme = scenario.themeName || 'Escenario CTF';
-  const difficulty = scenario.difficulty || 'Medium';
-  const os = scenario.targetOS || 'Debian 12 Bookworm';
-  const ip = scenario.ip || '10.10.110.42';
-  const vector = scenario.vector || 'Vulnerabilidad web';
-  const privesc = scenario.secondaryVector || 'Escalada local';
+  const code = escapeHtml(scenario.codename || 'CTF_LAB');
+  const theme = escapeHtml(scenario.themeName || 'Escenario CTF');
+  const difficulty = escapeHtml(scenario.difficulty || 'Medium');
+  const os = escapeHtml(scenario.targetOS || 'Debian 12 Bookworm');
+  const ip = escapeHtml(scenario.ip || '10.10.110.42');
+  const vector = escapeHtml(scenario.vector || 'Vulnerabilidad web');
+  const privesc = escapeHtml(scenario.secondaryVector || 'Escalada local');
   const dateStr = new Date().toLocaleDateString('es-ES', {
     year: 'numeric',
     month: 'long',
@@ -1019,7 +1011,7 @@ export function generateHtmlReport(scenario: CTFScenario): string {
           <span class="section-number">01</span>
           <h3 class="section-title">Contexto Narrativo & Sinopsis del Reto</h3>
         </div>
-        <p class="lead-text" style="white-space: pre-line;">${scenario.story}</p>
+        <p class="lead-text" style="white-space: pre-line;">${escapeHtml(scenario.story || '')}</p>
       </section>
 
       <!-- 2. Arquitectura & Topología -->
@@ -1073,10 +1065,10 @@ export function generateHtmlReport(scenario: CTFScenario): string {
                 .map(
                   (p) => `
                 <tr>
-                  <td><span class="port-tag">${p.port}/tcp</span></td>
-                  <td><strong>${p.service}</strong></td>
-                  <td style="font-family: var(--font-mono); font-size: 11px;">${p.version}</td>
-                  <td>${p.purpose}</td>
+                  <td><span class="port-tag">${escapeHtml(String(p.port))}/tcp</span></td>
+                  <td><strong>${escapeHtml(p.service || '')}</strong></td>
+                  <td style="font-family: var(--font-mono); font-size: 11px;">${escapeHtml(p.version || '')}</td>
+                  <td>${escapeHtml(p.purpose || '')}</td>
                 </tr>`
                 )
                 .join('')}
@@ -1133,7 +1125,7 @@ export function generateHtmlReport(scenario: CTFScenario): string {
             </div>
           </div>
           <div style="font-family: var(--font-mono); font-size: 11px; color: #0284c7; margin-top: 8px; word-break: break-all;">
-            <strong>Vector:</strong> ${cvssResult.vectorString}
+            <strong>Vector:</strong> ${escapeHtml(cvssResult.vectorString)}
           </div>
         </div>
 
@@ -1155,10 +1147,10 @@ export function generateHtmlReport(scenario: CTFScenario): string {
                 .map(
                   (m) => `
                 <tr>
-                  <td><span class="port-tag" style="background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe;">${m.id}</span></td>
-                  <td><strong>${m.name}</strong></td>
-                  <td><span style="font-family: var(--font-mono); font-size: 11px; color: #475569;">${m.tactic} (${m.tacticId})</span></td>
-                  <td style="font-size: 12px;">${m.description}</td>
+                  <td><span class="port-tag" style="background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe;">${escapeHtml(m.id || '')}</span></td>
+                  <td><strong>${escapeHtml(m.name || '')}</strong></td>
+                  <td><span style="font-family: var(--font-mono); font-size: 11px; color: #475569;">${escapeHtml(m.tactic || '')} (${escapeHtml(m.tacticId || '')})</span></td>
+                  <td style="font-size: 12px;">${escapeHtml(m.description || '')}</td>
                 </tr>`
                 )
                 .join('')}
@@ -1183,9 +1175,9 @@ export function generateHtmlReport(scenario: CTFScenario): string {
                 .map(
                   (o) => `
                 <tr>
-                  <td><span class="port-tag" style="background: #fffbeb; color: #b45309; border-color: #fde68a;">${o.code}</span></td>
-                  <td><strong>${o.name}</strong></td>
-                  <td style="font-size: 12px;">${o.description}</td>
+                  <td><span class="port-tag" style="background: #fffbeb; color: #b45309; border-color: #fde68a;">${escapeHtml(o.code || '')}</span></td>
+                  <td><strong>${escapeHtml(o.name || '')}</strong></td>
+                  <td style="font-size: 12px;">${escapeHtml(o.description || '')}</td>
                 </tr>`
                 )
                 .join('')}
@@ -1203,13 +1195,13 @@ export function generateHtmlReport(scenario: CTFScenario): string {
         <div class="flags-block">
           <div class="flag-card">
             <span class="flag-label">🚩 Bandera de Usuario (User Flag)</span>
-            <span class="flag-value">${scenario.userFlag}</span>
-            <span class="flag-path">Ruta en target: ${scenario.userFlagPath}</span>
+            <span class="flag-value">${escapeHtml(scenario.userFlag || '')}</span>
+            <span class="flag-path">Ruta en target: ${escapeHtml(scenario.userFlagPath || '')}</span>
           </div>
           <div class="flag-card">
             <span class="flag-label">🏆 Bandera de Administrador (Root Flag)</span>
-            <span class="flag-value">${scenario.rootFlag}</span>
-            <span class="flag-path">Ruta en target: ${scenario.rootFlagPath}</span>
+            <span class="flag-value">${escapeHtml(scenario.rootFlag || '')}</span>
+            <span class="flag-path">Ruta en target: ${escapeHtml(scenario.rootFlagPath || '')}</span>
           </div>
         </div>
       </section>
@@ -1228,10 +1220,10 @@ export function generateHtmlReport(scenario: CTFScenario): string {
             .map(
               (h) => `
             <div class="hint-row">
-              <span class="hint-level level-${h.level}">Nivel ${h.level}</span>
+              <span class="hint-level level-${escapeHtml(String(h.level))}">Nivel ${escapeHtml(String(h.level))}</span>
               <div class="hint-content">
-                <h6>${h.title} <small style="color: var(--text-muted); font-family: var(--font-mono);">[${h.category.toUpperCase()}]</small></h6>
-                <p>${h.text}</p>
+                <h6>${escapeHtml(h.title || '')} <small style="color: var(--text-muted); font-family: var(--font-mono);">[${escapeHtml((h.category || '').toUpperCase())}]</small></h6>
+                <p>${escapeHtml(h.text || '')}</p>
               </div>
             </div>`
             )
@@ -1249,8 +1241,8 @@ export function generateHtmlReport(scenario: CTFScenario): string {
           Para aprovisionar y levantar el laboratorio en cualquier entorno compatible con Docker:
         </p>
         <pre><code># 1. Descomprimir el paquete del laboratorio
-unzip lab_${(scenario.codename || 'ctf').toLowerCase()}_completo.zip
-cd lab_${(scenario.codename || 'ctf').toLowerCase()}
+unzip lab_${code.toLowerCase()}_completo.zip
+cd lab_${code.toLowerCase()}
 
 # 2. Levantar el laboratorio en segundo plano
 docker compose up --build -d

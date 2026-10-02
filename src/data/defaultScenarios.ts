@@ -59,10 +59,11 @@ export const DEFAULT_SCENARIOS_CATALOG: CTFScenario[] = [
         text: 'Crea un ejecutable llamado "service-checker" en /tmp que invoque /bin/bash -p, agrégalo a tu PATH ("export PATH=/tmp:$PATH") y ejecuta /usr/local/bin/system-diag para obtener root.',
       },
     ],
+    // Nota: solo se publica el puerto 80 porque es el único servicio que
+    // realmente instala y arranca el provisionamiento de abajo (Flask).
+    // No se exponen 22/445: ni sshd ni Samba se instalan en esta imagen.
     openPorts: [
-      { port: 22, service: 'SSH', version: 'OpenSSH 9.2p1 Debian', purpose: 'Acceso administrativo remoto restringido' },
       { port: 80, service: 'HTTP', version: 'Gunicorn/Flask + Nginx 1.24', purpose: 'Portal de transacciones E-Coin (Vulnerable a SSTI)' },
-      { port: 445, service: 'SMB', version: 'Samba 4.17 (Anon Read)', purpose: 'Almacén de logs desprotegido con nombres de cuenta' },
     ],
     topology: {
       nodes: [
@@ -73,35 +74,117 @@ export const DEFAULT_SCENARIOS_CATALOG: CTFScenario[] = [
       ],
       links: [
         { from: 'attacker', to: 'gateway', proto: 'VPN WireGuard', desc: 'Acceso seguro al laboratorio' },
-        { from: 'gateway', to: 'target', proto: 'TCP: 22, 80, 445', desc: 'Superficie de red expuesta' },
+        { from: 'gateway', to: 'target', proto: 'TCP: 80', desc: 'Superficie de red expuesta' },
         { from: 'target', to: 'internal', proto: 'IPC / SUID PrivEsc', desc: 'Canal de escalada local' },
       ],
     },
+    // provisionScript/dockerfile/dockerCompose alineados con el laboratorio
+    // funcional real (ver App.tsx, INITIAL_SCENARIO): la versión anterior de
+    // este preset nunca instalaba Flask ni arrancaba ningún servicio, pese a
+    // anunciar un puerto 80 "vulnerable a SSTI".
     provisionScript: `#!/usr/bin/env bash
 set -euo pipefail
-echo "[*] Initializing NetPhantom CTF: FSOCIETY_E_CORP_01"
+echo "[*] Initializing NetPhantom CTF Environment: FSOCIETY_E_CORP_01"
+
+apt-get update -y && apt-get install -y \\
+    python3 python3-pip python3-venv \\
+    gcc libc6-dev sudo curl net-tools \\
+    procps supervisor
+
 useradd -m -s /bin/bash elliot
+echo "elliot:Password123!" | chpasswd
+
+mkdir -p /opt/vulnerable_app
+cat << 'EOF' > /opt/vulnerable_app/app.py
+from flask import Flask, request, render_template_string
+
+app = Flask(__name__)
+
+TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head><title>Evil Corp E-Coin Validation Portal</title></head>
+<body>
+    <h2>[ EVIL CORP E-COIN LEDGER TERMINAL ]</h2>
+    <p>Transacción enviada para: <strong>%s</strong></p>
+</body>
+</html>
+"""
+
+@app.route("/")
+def index():
+    account = request.args.get("account", "Invitado_Corporativo")
+    # Vulnerabilidad didáctica deliberada de SSTI:
+    rendered = TEMPLATE % account
+    return render_template_string(rendered)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=80)
+EOF
+
+python3 -m venv /opt/vulnerable_app/venv
+/opt/vulnerable_app/venv/bin/pip install --no-cache-dir flask
+
 echo "CTF{3v1l_c0rp_3c01n_t3mpl4t3_1nj3ct10n_pwn3d}" > /home/elliot/user.txt
-echo "CTF{d4rk_4rmy_wh1t3r053_m45t3r_k3y_unl0ck3d}" > /root/root.txt
+chown elliot:elliot /home/elliot/user.txt
 chmod 640 /home/elliot/user.txt
+
+echo "CTF{d4rk_4rmy_wh1t3r053_m45t3r_k3y_unl0ck3d}" > /root/root.txt
+chown root:root /root/root.txt
 chmod 600 /root/root.txt
+
+cat << 'EOF' > /tmp/status_tool.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+int main() {
+    setuid(0);
+    setgid(0);
+    // Deliberate security flaw: relative path allows path hijacking
+    system("service-checker --status");
+    return 0;
+}
+EOF
+gcc /tmp/status_tool.c -o /usr/local/bin/system-diag
+chmod 4755 /usr/local/bin/system-diag
+rm -f /tmp/status_tool.c
+
+echo "[+] Lab provisioned successfully. Starting service on port 80..."
+exec /opt/vulnerable_app/venv/bin/python /opt/vulnerable_app/app.py
 `,
     dockerfile: `FROM debian:12-slim
-RUN apt-get update && apt-get install -y python3 python3-pip curl && rm -rf /var/lib/apt/lists/*
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y \\
+    python3 python3-pip python3-venv \\
+    gcc libc6-dev sudo curl procps \\
+    && rm -rf /var/lib/apt/lists/*
+RUN useradd -m -s /bin/bash elliot
+WORKDIR /app
 COPY provision.sh /app/provision.sh
 RUN chmod +x /app/provision.sh
+EXPOSE 80
 CMD ["/app/provision.sh"]`,
+    // Nota de seguridad: sin cap_drop/no-new-privileges aquí a propósito -
+    // el reto depende de un binario SUID (system-diag) y de un
+    // "apt-get install" en el arranque del contenedor; ver el comentario
+    // gemelo en App.tsx (INITIAL_SCENARIO) para el detalle completo.
     dockerCompose: `version: '3.8'
 services:
   ctf_target:
     build: .
     container_name: fsociety_e_corp_01
+    hostname: fsociety_e_corp_01
     ports:
-      - "8080:80"
-      - "2222:22"
+      - "127.0.0.1:8080:80"
     networks:
       ctf_isolated_net:
         ipv4_address: 10.10.110.42
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
 networks:
   ctf_isolated_net:
     driver: bridge

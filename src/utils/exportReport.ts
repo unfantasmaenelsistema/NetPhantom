@@ -36,14 +36,19 @@ export function printScenarioAsPdf(scenario: CTFScenario): void {
   iframe.style.border = '0';
   iframe.style.opacity = '0';
   iframe.style.pointerEvents = 'none';
-  document.body.appendChild(iframe);
+  // No doc.write(): the report is handed to the iframe via srcdoc, and the
+  // iframe is sandboxed without 'allow-scripts' since the generated report
+  // never needs to execute script, even though its own fields are escaped.
+  iframe.setAttribute('sandbox', 'allow-same-origin allow-modals');
+  iframe.srcdoc = htmlContent;
 
-  const doc = iframe.contentWindow?.document;
-  if (doc) {
-    doc.open();
-    doc.write(htmlContent);
-    doc.close();
+  const cleanup = () => {
+    if (iframe.parentNode) {
+      document.body.removeChild(iframe);
+    }
+  };
 
+  iframe.onload = () => {
     // Allow Google Fonts and styles to load before triggering print
     setTimeout(() => {
       try {
@@ -52,12 +57,10 @@ export function printScenarioAsPdf(scenario: CTFScenario): void {
       } catch (e) {
         console.error('Print trigger failed:', e);
       } finally {
-        setTimeout(() => {
-          if (iframe.parentNode) {
-            document.body.removeChild(iframe);
-          }
-        }, 1500);
+        setTimeout(cleanup, 1500);
       }
     }, 400);
-  }
+  };
+
+  document.body.appendChild(iframe);
 }

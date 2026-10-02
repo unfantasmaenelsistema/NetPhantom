@@ -27,6 +27,7 @@ import { CTFScenario } from './types';
 import { getScenarioFrameworks } from './utils/frameworksHelper';
 import { calculateCVSS31, inferCVSSVector } from './utils/cvssCalculator';
 import { validateAndParseScenario } from './utils/scenarioIo';
+import { isTemplateOnlyPreset } from './utils/labStatus';
 import { LabProgress, getSavedProgress, saveProgress } from './utils/userProgress';
 import {
   Shield,
@@ -114,10 +115,12 @@ Tu objetivo como auditor de seguridad es vulnerar la aplicación web para obtene
       text: 'Crea un ejecutable llamado "service-checker" en /tmp que invoque /bin/bash -p, agrégalo a tu PATH ("export PATH=/tmp:$PATH") y ejecuta /usr/local/bin/system-diag para obtener root.',
     },
   ],
+  // Nota: el laboratorio solo levanta el servicio Flask vulnerable en el
+  // puerto 80. No se publican 22/445 porque el provisionamiento no instala
+  // sshd ni Samba, y un puerto "abierto" sin servicio real detrás induciría
+  // a error durante el reconocimiento.
   openPorts: [
-    { port: 22, service: 'SSH', version: 'OpenSSH 9.2p1 Debian', purpose: 'Acceso administrativo remoto restringido' },
     { port: 80, service: 'HTTP', version: 'Gunicorn/Flask + Nginx 1.24', purpose: 'Portal de transacciones E-Coin (Vulnerable a SSTI)' },
-    { port: 445, service: 'SMB', version: 'Samba 4.17 (Anon Read)', purpose: 'Almacén de logs desprotegido con nombres de cuenta' },
   ],
   topology: {
     nodes: [
@@ -128,7 +131,7 @@ Tu objetivo como auditor de seguridad es vulnerar la aplicación web para obtene
     ],
     links: [
       { from: 'attacker', to: 'gateway', proto: 'VPN WireGuard', desc: 'Acceso seguro al laboratorio' },
-      { from: 'gateway', to: 'target', proto: 'TCP: 22, 80, 445', desc: 'Superficie de red expuesta' },
+      { from: 'gateway', to: 'target', proto: 'TCP: 80', desc: 'Superficie de red expuesta' },
       { from: 'target', to: 'internal', proto: 'IPC / SUID PrivEsc', desc: 'Canal de escalada local' },
     ],
   },
@@ -241,10 +244,19 @@ WORKDIR /app
 COPY provision.sh /app/provision.sh
 RUN chmod +x /app/provision.sh
 
-EXPOSE 80 22 445
+EXPOSE 80
 
 CMD ["/app/provision.sh"]
 `,
+  // Nota de seguridad: NO se aplica cap_drop:[ALL] ni
+  // security_opt:[no-new-privileges:true] en este laboratorio en concreto
+  // porque su reto de escalada de privilegios depende explícitamente de un
+  // binario SUID (system-diag). "no-new-privileges" desactiva por completo
+  // ese mecanismo del kernel y rompería el ejercicio; cap_drop:[ALL] además
+  // dejaría sin capacidades el "apt-get install" que corre el
+  // provisionScript al arrancar el contenedor. Si quieres endurecerlo más,
+  // valida primero en un entorno con Docker que el flujo SUID sigue
+  // funcionando con el cap_add mínimo que necesites.
   dockerCompose: `version: '3.8'
 
 services:
@@ -253,12 +265,16 @@ services:
     container_name: fsociety_e_corp_01
     hostname: fsociety_e_corp_01
     ports:
-      - "8080:80"
-      - "2222:22"
+      - "127.0.0.1:8080:80"
     networks:
       ctf_net:
         ipv4_address: 10.10.110.42
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
 
 networks:
   ctf_net:
@@ -424,6 +440,7 @@ export default function App() {
   const [diplomaScenario, setDiplomaScenario] = useState<CTFScenario | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
 
   const [progressMap, setProgressMap] = useState<Record<string, LabProgress>>(() => {
     return getSavedProgress();
@@ -673,6 +690,7 @@ export default function App() {
   const handleGenerateScenario = async (config: any) => {
     setIsGenerating(true);
     setErrorMsg(null);
+    setFallbackNotice(null);
 
     try {
       const response = await fetch('/api/generate-scenario', {
@@ -684,6 +702,13 @@ export default function App() {
       const data = await response.json();
       if (!response.ok || !data.success) {
         throw new Error(data.error || 'Fallo al estructurar el escenario con Gemini');
+      }
+
+      if (data.fallback) {
+        setFallbackNotice(
+          data.fallbackReason ||
+            'No se pudo usar la IA de Gemini: se ha generado un escenario del catálogo offline en su lugar.'
+        );
       }
 
       setScenario(data.scenario);
@@ -738,6 +763,27 @@ export default function App() {
           </div>
         )}
 
+        {/* Fallback-to-offline notification banner: the scenario WAS generated,
+            but from the curated catalog instead of live Gemini AI. This must
+            never be silent (see server.ts /api/generate-scenario). */}
+        {fallbackNotice && (
+          <div className="flex items-center justify-between p-4 rounded-xl border border-amber-800/60 bg-amber-950/30 text-xs text-amber-300">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>
+                <strong className="font-semibold">Modo Offline:</strong> {fallbackNotice}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setFallbackNotice(null)}
+              className="text-amber-400 hover:text-amber-200"
+            >
+              Cerrar
+            </button>
+          </div>
+        )}
+
         {/* View Switcher */}
         {activeTab === 'overview' && (
           <div className="space-y-6 animate-in fade-in duration-150">
@@ -784,6 +830,18 @@ export default function App() {
                     >
                       <span>CVSS: {currentCVSS.score.toFixed(1)} {currentCVSS.severity}</span>
                     </button>
+                    {isTemplateOnlyPreset(scenario.codename) && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span
+                          className="inline-flex items-center gap-1 font-semibold px-2 py-0.5 rounded border bg-amber-950/80 text-amber-300 border-amber-800/80"
+                          title="Este preset del catálogo offline no incluye un servicio vulnerable real: el contenedor solo levanta una shell base de Debian. Úsalo como plantilla narrativa / de pistas, no para practicar explotación."
+                        >
+                          <AlertCircle className="w-3 h-3" />
+                          Plantilla · sin servicio vulnerable
+                        </span>
+                      </>
+                    )}
                   </div>
 
                   <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
