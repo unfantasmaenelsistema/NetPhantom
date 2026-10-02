@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Layers, Download, Copy, Check, Terminal, Play, Server, Shield, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { isTemplateOnlyPreset } from '../utils/labStatus';
 
 interface DockerComposeViewProps {
   dockerCompose: string;
@@ -51,8 +52,22 @@ export const DockerComposeView: React.FC<DockerComposeViewProps> = ({
     URL.revokeObjectURL(url);
   };
 
+  const isTemplateOnly = isTemplateOnlyPreset(codename);
+
   return (
     <div className="space-y-6">
+      {isTemplateOnly && (
+        <div className="flex items-start gap-2.5 p-4 rounded-xl border border-amber-800/60 bg-amber-950/30 text-xs text-amber-300">
+          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+          <div>
+            <strong className="font-semibold block">Plantilla sin servicio vulnerable.</strong>
+            Este preset del catálogo offline no instala ningún servicio explotable: el contenedor solo
+            levanta una shell base de Debian (<code className="text-amber-200">CMD ["/bin/bash"]</code>). Úsalo para
+            practicar el flujo de topología, pistas y banderas, no para una auditoría de explotación real.
+          </div>
+        </div>
+      )}
+
       {/* Header & Local Deployment Guide */}
       <div className="border border-slate-800 bg-slate-900/60 rounded-xl p-5">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">

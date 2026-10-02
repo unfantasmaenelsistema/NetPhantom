@@ -1172,8 +1172,17 @@ CRITICAL RULES:
 `;
 
     let generatedData: any = null;
+    let usedFallback = false;
+    let fallbackReason = '';
+
+    const apiKeyConfigured = Boolean(
+      process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim() !== '' && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY'
+    );
 
     try {
+      if (!apiKeyConfigured) {
+        throw new Error('No hay GEMINI_API_KEY configurada en el servidor.');
+      }
       const selectedModel = await getBestAvailableModel(ai);
       const response = await ai.models.generateContent({
         model: selectedModel,
@@ -1188,6 +1197,10 @@ CRITICAL RULES:
       const cleanJson = responseText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
       generatedData = JSON.parse(cleanJson);
     } catch (apiError: any) {
+      usedFallback = true;
+      fallbackReason = apiKeyConfigured
+        ? `La IA de Gemini no respondió correctamente (${apiError?.message || 'error desconocido'}). Se usó un escenario del catálogo offline.`
+        : 'No hay GEMINI_API_KEY configurada. Se usó un escenario del catálogo offline (Modo Offline).';
       console.warn('Gemini API scenario generation fallback to curated preset:', apiError?.message);
       const presetKey = theme in DEFAULT_PRESETS ? theme : 'mr-robot';
       const preset = DEFAULT_PRESETS[presetKey];
@@ -1250,11 +1263,11 @@ CRITICAL RULES:
             text: `Eleva privilegios a superusuario para acceder a ${preset.rootFlagPath}.`,
           },
         ],
-        openPorts: [
-          { port: 22, service: 'SSH', version: 'OpenSSH 9.2p1', purpose: 'Acceso administrativo restringido' },
-          { port: 80, service: 'HTTP', version: 'Flask/Gunicorn + Nginx', purpose: 'Portal temático vulnerable' },
-          { port: 445, service: 'SMB', version: 'Samba 4.17 (Anon Read)', purpose: 'Almacén de logs desprotegido' },
-        ],
+        // Este fallback genérico (sin clave de Gemini o con la API caída) NO
+        // instala ningún servicio de red real: solo crea un usuario y dos
+        // ficheros de bandera accesibles vía "docker exec". No se anuncian
+        // puertos abiertos para no inducir a error en el reconocimiento.
+        openPorts: [],
         topology: {
           nodes: [
             { id: 'attacker', label: 'Kali Linux (10.10.14.5)', type: 'attacker', role: 'Estudiante / Red Team' },
@@ -1264,15 +1277,18 @@ CRITICAL RULES:
           ],
           links: [
             { from: 'attacker', to: 'firewall', proto: 'VPN WireGuard', desc: 'Acceso a laboratorio aislado' },
-            { from: 'firewall', to: 'target', proto: 'TCP: 22, 80, 445', desc: 'Superficie de ataque expuesta' },
+            { from: 'firewall', to: 'target', proto: 'docker exec', desc: 'Sin servicio de red: acceso de práctica vía shell del contenedor' },
             { from: 'target', to: 'vault', proto: 'IPC / Sudo / SUID', desc: 'Ruta de escalada local' },
           ],
         },
         provisionScript: `#!/usr/bin/env bash
-# NetPhantom CTF Automated Provisioning Script
+# NetPhantom CTF Automated Provisioning Script (plantilla genérica de reserva,
+# sin IA disponible). No expone ningún servicio de red: usa
+# "docker exec -it ${preset.codename.toLowerCase()} bash" para practicar la
+# búsqueda de banderas y la escalada de privilegios local.
 set -euo pipefail
 echo "[*] Initializing NetPhantom CTF Environment: ${preset.codename}"
-apt-get update -y && apt-get install -y python3 python3-pip python3-venv sudo curl net-tools procps supervisor
+apt-get update -y && apt-get install -y python3 python3-pip python3-venv sudo curl net-tools procps
 useradd -m -s /bin/bash player
 echo "player:Password123!" | chpasswd
 mkdir -p /opt/vulnerable_app
@@ -1280,7 +1296,8 @@ echo "${preset.userFlag}" > ${preset.userFlagPath}
 chmod 640 ${preset.userFlagPath}
 echo "${preset.rootFlag}" > ${preset.rootFlagPath}
 chmod 600 ${preset.rootFlagPath}
-echo "[+] Lab provisioned successfully."
+echo "[+] Lab provisioned successfully. Container will stay up for 'docker exec' access."
+exec sleep infinity
 `,
         dockerfile: `FROM debian:12-slim
 ENV DEBIAN_FRONTEND=noninteractive
@@ -1289,7 +1306,6 @@ RUN useradd -m -s /bin/bash player
 WORKDIR /app
 COPY provision.sh /app/provision.sh
 RUN chmod +x /app/provision.sh
-EXPOSE 80 22 445
 CMD ["/app/provision.sh"]
 `,
         dockerCompose: `version: '3.8'
@@ -1299,14 +1315,9 @@ services:
     build: .
     container_name: ${preset.codename.toLowerCase()}
     hostname: ${preset.codename.toLowerCase()}
-    ports:
-      - "8080:80"
-      - "2222:22"
-      - "4455:445"
     networks:
       ctf_isolated_net:
         ipv4_address: ${preset.ip}
-    restart: unless-stopped
     deploy:
       resources:
         limits:
@@ -1367,6 +1378,8 @@ Elevación a superusuario para leer ${preset.rootFlagPath}: ${preset.rootFlag}.
     return res.json({
       success: true,
       scenario: generatedData,
+      fallback: usedFallback,
+      ...(usedFallback ? { fallbackReason } : {}),
     });
   } catch (error: any) {
     console.error('Error generating scenario:', error);
