@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
+import { rateLimit } from 'express-rate-limit';
 
 dotenv.config();
 
@@ -10,9 +11,43 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
 
-app.use(express.json({ limit: '10mb' }));
+// PORT/HOST se leen de .env / entorno. Por defecto el servidor solo escucha
+// en 127.0.0.1 (localhost): hace falta fijar HOST=0.0.0.0 explícitamente
+// para exponerlo a otros equipos de la red, algo que esta app nunca necesita
+// para su uso normal (un profesor o alumno ejecutándola en su propio equipo).
+const DEFAULT_PORT = 3000;
+const parsedPort = Number(process.env.PORT);
+const PORT = Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort < 65536 ? parsedPort : DEFAULT_PORT;
+const HOST = process.env.HOST?.trim() || '127.0.0.1';
+
+const MAX_BODY_SIZE = process.env.MAX_BODY_SIZE?.trim() || '1mb';
+
+app.set('trust proxy', false);
+app.use(express.json({ limit: MAX_BODY_SIZE }));
+
+// Responde 413/400 de forma controlada en vez de tumbar el proceso cuando
+// llega un body demasiado grande o JSON malformado.
+app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err?.type === 'entity.too.large') {
+    return res.status(413).json({ success: false, error: 'El cuerpo de la petición supera el límite permitido.' });
+  }
+  if (err?.type === 'entity.parse.failed' || err instanceof SyntaxError) {
+    return res.status(400).json({ success: false, error: 'JSON de la petición no válido.' });
+  }
+  return next(err);
+});
+
+// Rate limiting básico por IP para las rutas que consumen la API de Gemini,
+// pensado para disuadir abuso/rafagas accidentales en un uso local, no para
+// soportar tráfico adversarial a gran escala.
+const aiRateLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Demasiadas peticiones. Espera un minuto antes de volver a intentarlo.' },
+});
 
 const getGeminiClient = () => {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -1004,19 +1039,70 @@ if __name__ == "__main__":
 }
 
 // Route: Generate CTF Scenario via Gemini
-app.post('/api/generate-scenario', async (req, res) => {
+// --- Input validation helpers for the AI-backed routes ---
+// Everything here is attacker-controlled (any visitor to the local server),
+// so every field is type- and length-checked before it is spliced into a
+// Gemini prompt or echoed back, instead of trusted as-is.
+const MAX_SHORT_FIELD = 200;
+const MAX_NOTES_FIELD = 2000;
+const MAX_CHAT_MESSAGE = 4000;
+const MAX_CHAT_HISTORY = 40;
+
+function cleanShortString(value: unknown, maxLen: number, fallback: string): string {
+  if (typeof value !== 'string') return fallback;
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  return trimmed.slice(0, maxLen);
+}
+
+function validateScenarioBody(body: any): { error: string } | {
+  theme: string;
+  genre: string;
+  customThemeName: string;
+  difficulty: string;
+  vector: string;
+  secondaryVector: string;
+  targetOS: string;
+  flagPrefix: string;
+  customNotes: string;
+} {
+  if (!body || typeof body !== 'object') {
+    return { error: 'Cuerpo de la petición inválido.' };
+  }
+  const allowedDifficulties = ['Easy', 'Medium', 'Hard', 'Insane'];
+  const difficulty = typeof body.difficulty === 'string' && allowedDifficulties.includes(body.difficulty)
+    ? body.difficulty
+    : 'Medium';
+  return {
+    theme: cleanShortString(body.theme, MAX_SHORT_FIELD, 'mr-robot'),
+    genre: cleanShortString(body.genre, MAX_SHORT_FIELD, 'tv_series'),
+    customThemeName: cleanShortString(body.customThemeName, MAX_SHORT_FIELD, ''),
+    difficulty,
+    vector: cleanShortString(body.vector, MAX_SHORT_FIELD, 'SSTI (Server-Side Template Injection)'),
+    secondaryVector: cleanShortString(body.secondaryVector, MAX_SHORT_FIELD, 'SUID Custom Binary'),
+    targetOS: cleanShortString(body.targetOS, MAX_SHORT_FIELD, 'Debian 12 Bookworm'),
+    flagPrefix: cleanShortString(body.flagPrefix, 40, 'CTF'),
+    customNotes: cleanShortString(body.customNotes, MAX_NOTES_FIELD, ''),
+  };
+}
+
+app.post('/api/generate-scenario', aiRateLimiter, async (req, res) => {
   try {
+    const validated = validateScenarioBody(req.body);
+    if ('error' in validated) {
+      return res.status(400).json({ success: false, error: validated.error });
+    }
     const {
-      theme = 'mr-robot',
-      genre = 'tv_series',
-      customThemeName = '',
-      difficulty = 'Medium',
-      vector = 'SSTI (Server-Side Template Injection)',
-      secondaryVector = 'SUID Custom Binary',
-      targetOS = 'Debian 12 Bookworm',
-      flagPrefix = 'CTF',
-      customNotes = '',
-    } = req.body;
+      theme,
+      genre,
+      customThemeName,
+      difficulty,
+      vector,
+      secondaryVector,
+      targetOS,
+      flagPrefix,
+      customNotes,
+    } = validated;
 
     const ai = getGeminiClient();
 
@@ -1292,9 +1378,27 @@ Elevación a superusuario para leer ${preset.rootFlagPath}: ${preset.rootFlag}.
 });
 
 // Route: AI CTF Mentor Multi-turn Chat
-app.post('/api/chat', async (req, res) => {
+app.post('/api/chat', aiRateLimiter, async (req, res) => {
   try {
-    const { messages = [], role = 'mentor', model = 'gemini-3.5-flash' } = req.body;
+    const { role = 'mentor', model = 'gemini-3.5-flash' } = req.body || {};
+    const rawMessages = req.body?.messages;
+
+    if (rawMessages !== undefined && !Array.isArray(rawMessages)) {
+      return res.status(400).json({ success: false, error: '"messages" debe ser un array.' });
+    }
+    if (Array.isArray(rawMessages) && rawMessages.length > MAX_CHAT_HISTORY) {
+      return res.status(400).json({ success: false, error: `El historial de chat admite como máximo ${MAX_CHAT_HISTORY} mensajes.` });
+    }
+
+    const messages = (Array.isArray(rawMessages) ? rawMessages : [])
+      .filter((m: any) => m && typeof m === 'object' && typeof m.content === 'string' && m.content.trim().length > 0)
+      .map((m: any) => ({
+        role: m.role === 'user' ? 'user' : 'model',
+        content: String(m.content).slice(0, MAX_CHAT_MESSAGE),
+      }));
+
+    const allowedRoles = ['mentor', 'provisioner', 'auditor', 'hint_crafter'];
+    const safeRole = typeof role === 'string' && allowedRoles.includes(role) ? role : 'mentor';
 
     const roleSystemInstructions: Record<string, string> = {
       mentor: `Eres un Maestro y Diseñador Senior de Escenarios CTF (Capture The Flag).
@@ -1312,7 +1416,7 @@ Tu tarea es generar pistas en 3 niveles escalonados cuando el usuario te plantee
 Responde siempre con este formato estructurado en español.`,
     };
 
-    const systemInstruction = roleSystemInstructions[role] || roleSystemInstructions['mentor'];
+    const systemInstruction = roleSystemInstructions[safeRole];
 
     const ai = getGeminiClient();
 
@@ -1321,8 +1425,8 @@ Responde siempre con este formato estructurado en español.`,
       targetModel = await getBestAvailableModel(ai, 'pro');
     }
 
-    const contents = messages.map((m: { role: string; content: string }) => ({
-      role: m.role === 'user' ? 'user' : 'model',
+    const contents = messages.map((m) => ({
+      role: m.role,
       parts: [{ text: m.content }],
     }));
 
@@ -1359,20 +1463,28 @@ Responde siempre con este formato estructurado en español.`,
 });
 
 // Route: Generate Machine Theme Art & Poster via gemini-3-pro-image-preview
-app.post('/api/generate-machine-art', async (req, res) => {
+const MAX_ART_PROMPT = 2000;
+const VALID_ASPECT_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4'];
+
+app.post('/api/generate-machine-art', aiRateLimiter, async (req, res) => {
   try {
     const {
       prompt,
       imageSize = '1K',
       aspectRatio = '1:1',
-    } = req.body;
+    } = req.body || {};
 
-    if (!prompt) {
-      return res.status(400).json({ error: 'Prompt is required' });
+    if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+      return res.status(400).json({ success: false, error: 'El campo "prompt" es obligatorio y debe ser texto.' });
     }
+    if (prompt.length > MAX_ART_PROMPT) {
+      return res.status(400).json({ success: false, error: `El "prompt" admite como máximo ${MAX_ART_PROMPT} caracteres.` });
+    }
+    const safePrompt = prompt.trim();
 
     const validSizes = ['1K', '2K', '4K'];
-    const chosenSize = validSizes.includes(imageSize) ? imageSize : '1K';
+    const chosenSize = typeof imageSize === 'string' && validSizes.includes(imageSize) ? imageSize : '1K';
+    const chosenAspectRatio = typeof aspectRatio === 'string' && VALID_ASPECT_RATIOS.includes(aspectRatio) ? aspectRatio : '1:1';
 
     const ai = getGeminiClient();
 
@@ -1383,11 +1495,11 @@ app.post('/api/generate-machine-art', async (req, res) => {
       response = await ai.models.generateContent({
         model: 'gemini-3-pro-image-preview',
         contents: {
-          parts: [{ text: prompt }],
+          parts: [{ text: safePrompt }],
         },
         config: {
           imageConfig: {
-            aspectRatio: aspectRatio as any,
+            aspectRatio: chosenAspectRatio as any,
             imageSize: chosenSize as any,
           },
         },
@@ -1398,11 +1510,11 @@ app.post('/api/generate-machine-art', async (req, res) => {
       response = await ai.models.generateContent({
         model: 'gemini-3.1-flash-image',
         contents: {
-          parts: [{ text: prompt }],
+          parts: [{ text: safePrompt }],
         },
         config: {
           imageConfig: {
-            aspectRatio: aspectRatio as any,
+            aspectRatio: chosenAspectRatio as any,
             imageSize: chosenSize as any,
           },
         },
@@ -1429,7 +1541,7 @@ app.post('/api/generate-machine-art', async (req, res) => {
       imageUrl,
       modelUsed,
       imageSize: chosenSize,
-      aspectRatio,
+      aspectRatio: chosenAspectRatio,
     });
   } catch (error: any) {
     console.error('Image generation error:', error);
@@ -1482,8 +1594,11 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server listening on http://0.0.0.0:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`Server listening on http://${HOST}:${PORT}`);
+    if (HOST === '0.0.0.0' || HOST === '::') {
+      console.warn('[AVISO] El servidor escucha en todas las interfaces de red. Úsalo solo si sabes lo que haces.');
+    }
   });
 }
 
