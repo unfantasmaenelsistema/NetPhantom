@@ -11,6 +11,25 @@ Diseñado por y para la comunidad de **[Un Fantasma En El Sistema](https://www.u
 
 ---
 
+## 🖼️ Capturas de Pantalla
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/01-overview.png" alt="Resumen del escenario: historia, vector de ataque, MITRE/OWASP y comprobación de banderas"></td>
+    <td><img src="docs/screenshots/02-docker-compose.png" alt="Pestaña Docker Compose con el docker-compose.yml generado"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/03-terminal.png" alt="Web Shell Playground: terminal simulada de reconocimiento y explotación"></td>
+    <td><img src="docs/screenshots/06-dashboard.png" alt="Mi Progreso: panel de nivel, XP e historial de laboratorios"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/04-hints.png" alt="Sistema de pistas graduales en 3 niveles con protección anti-spoiler"></td>
+    <td><img src="docs/screenshots/05-frameworks.png" alt="Alineación MITRE ATT&CK, OWASP Top 10 y calculadora CVSS v3.1"></td>
+  </tr>
+</table>
+
+---
+
 ## ✨ Características Principales
 
 * 📤 **Importador & Exportador de Retos (*Drag & Drop*)**: Diseñado para profesores, instructores y alumnos. Permite guardar la definición íntegra del reto en formato `.json` o `.yaml` e importar cualquier reto con solo arrastrar y soltar el archivo en la pantalla o pegando su contenido.
