@@ -51,17 +51,26 @@ No necesitas conocimientos avanzados de terminal ni configurar variables a mano.
 
 ---
 
+## 📋 Requisitos
+
+* **Node.js** v20.19+ o v22.12+ (necesario para Vite 8; versiones más antiguas no son compatibles). Descárgalo en [nodejs.org](https://nodejs.org/).
+* **npm** (incluido con Node.js). El proyecto usa `npm`/`package-lock.json` como gestor único; no uses `bun`/`yarn`/`pnpm` para instalar.
+* **Docker Engine + Docker Compose v2** — opcional, solo si quieres desplegar en tu máquina los laboratorios vulnerables que NetPhantom genera o exporta. La propia interfaz (generar escenarios, pistas, informes, certificado) funciona sin Docker.
+* **Clave de Google Gemini** — opcional. Sin ella, NetPhantom funciona al 100% en **Modo Offline** con el catálogo de escenarios incluido (ver más abajo).
+
+---
+
 ## 🛠️ Puesta en Marcha Manual
 
 Si prefieres ejecutar los comandos manualmente:
 
 ```bash
 # 1. Clonar el repositorio
-git clone https://github.com/tu-usuario/netphantom-ctf.git
-cd netphantom-ctf
+git clone https://github.com/unfantasmaenelsistema/NetPhantom.git
+cd NetPhantom
 
-# 2. Instalar dependencias de Node.js
-npm install
+# 2. Instalar dependencias de Node.js (usa npm ci si existe package-lock.json)
+npm ci
 
 # 3. Crear el archivo de configuración a partir del ejemplo
 cp .env.example .env
@@ -73,7 +82,7 @@ cp .env.example .env
 npm run dev
 ```
 
-La aplicación estará disponible inmediatamente en `http://localhost:3000`.
+La aplicación estará disponible en `http://127.0.0.1:3000` (o el `PORT` que hayas configurado en `.env`).
 
 ---
 
@@ -146,8 +155,30 @@ Esta sección describe **solo lo que el código garantiza hoy**, no aspiraciones
 
 ---
 
+## ⚠️ Limitaciones Reales
+
+* **Solo 1 de los 16 escenarios del catálogo offline tiene un laboratorio Docker totalmente funcional** (`FSOCIETY_E_CORP_01`, inspirado en Mr. Robot). Los otros 15 son plantillas narrativas completas (historia, pistas, topología, banderas) pero su contenedor no instala ningún servicio explotable real — la interfaz los marca como **"Plantilla · sin servicio vulnerable"**. Puedes usarlos para practicar el flujo de la app (pistas, banderas, informe, certificado) o como punto de partida para montar tú el servicio.
+* Los escenarios generados con **IA (Gemini)** sí incluyen, por diseño del prompt, un `Dockerfile`/`provisionScript` que instala y arranca un servicio real — pero es contenido generado por un modelo de lenguaje: revísalo antes de confiar en él para una clase o evaluación.
+* El **certificado de superación es autoemitido**: se genera en tu navegador a partir de datos que tú mismo controlas (nombre, banderas validadas localmente). No es una acreditación oficial ni verificable por terceros.
+* El **rate limiting y el límite de tamaño de body** del servidor son una protección básica para uso local en un único equipo, no defensas pensadas para exponer el servicio a Internet o a múltiples usuarios no confiables.
+* NetPhantom **no se ha probado con Docker real durante esta revisión** (el entorno de desarrollo usado no tenía Docker disponible). Las validaciones de `docker-compose.yml` (ver `src/utils/dockerSecurity.ts`) se probaron a nivel de código, pero el despliegue real de los laboratorios generados no se verificó de extremo a extremo — pruébalo tú antes de usarlo en clase.
+
+## ✅ Uso Responsable
+
+NetPhantom genera **máquinas deliberadamente vulnerables** con fines educativos. Por favor:
+
+* Despliega los laboratorios **solo en local y en redes aisladas** (tu propio equipo, una VM o un entorno de laboratorio controlado) — nunca en un servidor compartido, en producción, ni expuesto a Internet.
+* No practiques técnicas de explotación contra sistemas que no sean tuyos o para los que no tengas autorización explícita.
+* Si eres instructor/a, revisa el contenido generado por IA antes de distribuirlo a tus alumnos: ni el guion narrativo ni el código de aprovisionamiento están auditados por un humano por defecto.
+
+---
+
 ## 🌐 Créditos y Comunidad
 
 Desarrollado para la comunidad de entusiastas de la seguridad informática y el hacking ético:
-* **Web Oficial**: [https://www.unfantasmaenelsistema.com/](https://www.unfantasmaenelsistema.com/)
+* **Web Oficial**: [https://www.unfantasmaenelsistema.com](https://www.unfantasmaenelsistema.com)
+* **Tienda (GhostApps)**: [https://ghostore.unfantasmaenelsistema.com](https://ghostore.unfantasmaenelsistema.com)
+* **Academia**: [https://ghostacademy.unfantasmaenelsistema.com](https://ghostacademy.unfantasmaenelsistema.com)
 * **Canal y Recursos**: Seguridad Informática, CTFs, Análisis Forense, DevSecOps y Hacking Ético.
+* **Licencia**: [MIT](LICENSE)
+* **Seguridad**: ¿encontraste un problema de seguridad en la app? Consulta [SECURITY.md](SECURITY.md).
