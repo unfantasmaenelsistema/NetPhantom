@@ -1,0 +1,6 @@
+{
+  "name": "NetPhantom - Generador Dinámico de Escenarios CTF",
+  "description": "Generador dinámico de máquinas vulnerables y escenarios CTF con temáticas de series de televisión, ciencia ficción, fantasía, terror y cyberpunk, topología de red, sistema de pistas graduales, scripts bash de provisión, docker-compose, script autónomo en Python, póster oficial y mentoría con Gemini.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
