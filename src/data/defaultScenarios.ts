@@ -91,7 +91,11 @@ apt-get update -y && apt-get install -y \\
     gcc libc6-dev sudo curl net-tools \\
     procps supervisor
 
-useradd -m -s /bin/bash elliot
+# Guarded: con "restart: unless-stopped", cualquier crash/reinicio de host
+# vuelve a correr este script contra el rootfs persistido del contenedor,
+# donde elliot ya existe del primer arranque - un useradd a pelo fallaba
+# y, con set -euo pipefail, abortaba antes de que Flask llegase a arrancar.
+id elliot &>/dev/null || useradd -m -s /bin/bash elliot
 echo "elliot:Password123!" | chpasswd
 
 mkdir -p /opt/vulnerable_app
@@ -159,12 +163,16 @@ RUN apt-get update && apt-get install -y \\
     python3 python3-pip python3-venv \\
     gcc libc6-dev sudo curl procps \\
     && rm -rf /var/lib/apt/lists/*
-RUN useradd -m -s /bin/bash elliot
 WORKDIR /app
 COPY provision.sh /app/provision.sh
 RUN chmod +x /app/provision.sh
 EXPOSE 80
 CMD ["/app/provision.sh"]`,
+    // No "RUN useradd elliot" arriba: provision.sh (CMD) ya lo crea y le
+    // fija la contraseña. Un segundo useradd al arrancar el contenedor
+    // fallaba con "user already exists", y set -euo pipefail abortaba el
+    // script antes de instalar Flask o escribir las flags - el único
+    // laboratorio "real" del catálogo offline nunca llegaba a arrancar.
     // Nota de seguridad: sin cap_drop/no-new-privileges aquí a propósito -
     // el reto depende de un binario SUID (system-diag) y de un
     // "apt-get install" en el arranque del contenedor; ver el comentario

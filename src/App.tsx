@@ -151,7 +151,11 @@ apt-get update -y && apt-get install -y \\
     procps supervisor
 
 # 2. Create unprivileged challenge user
-useradd -m -s /bin/bash elliot
+# Guarded: with "restart: unless-stopped", any crash/host-reboot/daemon
+# restart re-runs this script against the container's persisted rootfs,
+# where elliot already exists from the first boot - a bare useradd would
+# fail and, under set -euo pipefail, abort before Flask ever starts.
+id elliot &>/dev/null || useradd -m -s /bin/bash elliot
 echo "elliot:Password123!" | chpasswd
 
 # 3. Deploy challenge directory & vulnerable service
@@ -238,8 +242,10 @@ RUN apt-get update && apt-get install -y \\
     gcc libc6-dev sudo curl procps \\
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -s /bin/bash elliot
-
+# No useradd elliot here: provision.sh (CMD) creates it and sets its
+# password. A second useradd at container start would fail with
+# "user already exists", and set -euo pipefail aborts before Flask
+# ever starts.
 WORKDIR /app
 COPY provision.sh /app/provision.sh
 RUN chmod +x /app/provision.sh

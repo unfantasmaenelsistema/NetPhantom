@@ -180,7 +180,7 @@ Esta sección describe **solo lo que el código garantiza hoy**, no aspiraciones
 * Los escenarios generados con **IA (Gemini)** sí incluyen, por diseño del prompt, un `Dockerfile`/`provisionScript` que instala y arranca un servicio real — pero es contenido generado por un modelo de lenguaje: revísalo antes de confiar en él para una clase o evaluación.
 * El **certificado de superación es autoemitido**: se genera en tu navegador a partir de datos que tú mismo controlas (nombre, banderas validadas localmente). No es una acreditación oficial ni verificable por terceros.
 * El **rate limiting y el límite de tamaño de body** del servidor son una protección básica para uso local en un único equipo, no defensas pensadas para exponer el servicio a Internet o a múltiples usuarios no confiables.
-* NetPhantom **no se ha probado con Docker real durante esta revisión** (el entorno de desarrollo usado no tenía Docker disponible). Las validaciones de `docker-compose.yml` (ver `src/utils/dockerSecurity.ts`) se probaron a nivel de código, pero el despliegue real de los laboratorios generados no se verificó de extremo a extremo — pruébalo tú antes de usarlo en clase.
+* El laboratorio `FSOCIETY_E_CORP_01` se desplegó y resolvió de extremo a extremo con Docker real (`docker compose up --build`, SSTI → RCE → flag de usuario → path hijacking del SUID → root) el 2026-10-05 — ver [Changelog](#-changelog). El resto de escenarios offline (plantillas narrativas sin servicio real) y los generados con IA no se han verificado con un despliegue Docker real.
 
 ## ✅ Uso Responsable
 
@@ -189,6 +189,28 @@ NetPhantom genera **máquinas deliberadamente vulnerables** con fines educativos
 * Despliega los laboratorios **solo en local y en redes aisladas** (tu propio equipo, una VM o un entorno de laboratorio controlado) — nunca en un servidor compartido, en producción, ni expuesto a Internet.
 * No practiques técnicas de explotación contra sistemas que no sean tuyos o para los que no tengas autorización explícita.
 * Si eres instructor/a, revisa el contenido generado por IA antes de distribuirlo a tus alumnos: ni el guion narrativo ni el código de aprovisionamiento están auditados por un humano por defecto.
+
+---
+
+## 📝 Changelog
+
+**2026-10-05 — El único laboratorio Docker real no sobrevivía a un reinicio**
+
+Se desplegó `FSOCIETY_E_CORP_01` con Docker real (`docker compose up --build`) para verificar end-to-end lo que el PR de endurecimiento no pudo probar por falta de Docker en su entorno. El contenedor moría en el primer arranque:
+
+```
+useradd: user 'elliot' already exists
+```
+
+🐛 **Causa**: el `Dockerfile` ya crea el usuario `elliot` (`RUN useradd -m -s /bin/bash elliot`) y `provision.sh` (el `CMD` del contenedor) lo vuelve a crear sin comprobar si ya existe. Con `set -euo pipefail`, ese segundo `useradd` abortaba el script *antes* de instalar Flask, escribir las banderas o compilar el binario SUID — el único laboratorio "real" del catálogo offline nunca llegaba a arrancar. Y como la propia app exporta el `docker-compose.yml` con `restart: unless-stopped`, cualquier reinicio del contenedor (crash, reinicio del host, `docker restart`) repetía el mismo fallo para siempre, aunque el primer arranque hubiera ido bien.
+
+✅ **Corregido** en `src/App.tsx` (`INITIAL_SCENARIO`) y `src/data/defaultScenarios.ts`: se quita el `useradd` del `Dockerfile` (ya lo hace `provision.sh`) y se hace el de `provision.sh` idempotente (`id elliot &>/dev/null || useradd ...`), para que sobreviva a reinicios sin tocar el resto del aprovisionamiento.
+
+**Verificado de extremo a extremo tras el fix**, con Docker real:
+- `docker compose up --build -d` → aprovisiona y arranca Flask sin error, en el primer arranque y tras un reinicio simulado.
+- SSTI confirmado: `?account={{7*7}}` → `49`.
+- RCE real vía MRO de Jinja2 (`self.__init__.__globals__.__builtins__.__import__('os').popen(...)`) → lee `/home/elliot/user.txt` → bandera de usuario real obtenida.
+- Escalada de privilegios real explotando el path hijacking del binario SUID `system-diag` → `uid=0(root)` → bandera de root real obtenida.
 
 ---
 
