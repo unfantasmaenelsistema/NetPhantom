@@ -20,6 +20,7 @@ import { CTFScenario } from '../types';
 import { exportScenarioAsHtml, printScenarioAsPdf } from '../utils/exportReport';
 import { generateHtmlReport } from '../utils/generateHtmlReport';
 import { exportScenarioAsJson, exportScenarioAsYaml } from '../utils/scenarioIo';
+import { isTemplateOnlyPreset } from '../utils/labStatus';
 import * as yaml from 'js-yaml';
 
 interface ExportLabModalProps {
@@ -39,10 +40,17 @@ export const ExportLabModal: React.FC<ExportLabModalProps> = ({
   if (!isOpen) return null;
 
   const codeLower = (scenario.codename || 'ctf').toLowerCase();
+  const isTemplateOnly = isTemplateOnlyPreset(scenario.codename);
 
   // Generate README.md
   const generateReadme = () => {
     return `# Laboratorio CTF: ${scenario.themeName}
+${isTemplateOnly ? `
+> ⚠️ **Plantilla sin servicio vulnerable**: este preset del catálogo offline de NetPhantom
+> no instala ningún servicio explotable real. El contenedor solo levanta una shell base
+> de Debian (\`CMD ["/bin/bash"]\`). Sirve para practicar el flujo de topología, pistas y
+> banderas, no para una auditoría de explotación real sobre un servicio en marcha.
+` : ''}
 **Portal Oficial:** [Un Fantasma En El Sistema](https://www.unfantasmaenelsistema.com/)  
 **Codename:** \`${scenario.codename}\`  
 **Dificultad:** \`${scenario.difficulty}\`  
@@ -337,6 +345,18 @@ ${(scenario.hints || [])
 
         {/* Modal Body */}
         <div className="p-6 overflow-y-auto space-y-5 text-xs">
+          {isTemplateOnly && (
+            <div className="flex items-start gap-2.5 p-4 rounded-xl border border-amber-800/60 bg-amber-950/30 text-amber-300">
+              <Info className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <strong className="font-semibold block">Plantilla sin servicio vulnerable.</strong>
+                Este preset del catálogo offline no instala ningún servicio explotable: el contenedor exportado
+                solo levanta una shell base de Debian. Es útil para practicar topología, pistas y banderas, pero
+                no hay nada que auditar u explotar dentro del contenedor.
+              </div>
+            </div>
+          )}
+
           {/* Main Action Banner: Download All as ZIP */}
           <div className="p-4 rounded-xl bg-gradient-to-r from-cyan-950/60 to-slate-900 border border-cyan-800/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="space-y-1">

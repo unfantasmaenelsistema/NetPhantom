@@ -3,6 +3,8 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
+import { rateLimit } from 'express-rate-limit';
+import { findDockerComposeSecurityIssues } from './src/utils/dockerSecurity';
 
 dotenv.config();
 
@@ -10,9 +12,43 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
 
-app.use(express.json({ limit: '10mb' }));
+// PORT/HOST se leen de .env / entorno. Por defecto el servidor solo escucha
+// en 127.0.0.1 (localhost): hace falta fijar HOST=0.0.0.0 explícitamente
+// para exponerlo a otros equipos de la red, algo que esta app nunca necesita
+// para su uso normal (un profesor o alumno ejecutándola en su propio equipo).
+const DEFAULT_PORT = 3000;
+const parsedPort = Number(process.env.PORT);
+const PORT = Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort < 65536 ? parsedPort : DEFAULT_PORT;
+const HOST = process.env.HOST?.trim() || '127.0.0.1';
+
+const MAX_BODY_SIZE = process.env.MAX_BODY_SIZE?.trim() || '1mb';
+
+app.set('trust proxy', false);
+app.use(express.json({ limit: MAX_BODY_SIZE }));
+
+// Responde 413/400 de forma controlada en vez de tumbar el proceso cuando
+// llega un body demasiado grande o JSON malformado.
+app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err?.type === 'entity.too.large') {
+    return res.status(413).json({ success: false, error: 'El cuerpo de la petición supera el límite permitido.' });
+  }
+  if (err?.type === 'entity.parse.failed' || err instanceof SyntaxError) {
+    return res.status(400).json({ success: false, error: 'JSON de la petición no válido.' });
+  }
+  return next(err);
+});
+
+// Rate limiting básico por IP para las rutas que consumen la API de Gemini,
+// pensado para disuadir abuso/rafagas accidentales en un uso local, no para
+// soportar tráfico adversarial a gran escala.
+const aiRateLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Demasiadas peticiones. Espera un minuto antes de volver a intentarlo.' },
+});
 
 const getGeminiClient = () => {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -1004,19 +1040,70 @@ if __name__ == "__main__":
 }
 
 // Route: Generate CTF Scenario via Gemini
-app.post('/api/generate-scenario', async (req, res) => {
+// --- Input validation helpers for the AI-backed routes ---
+// Everything here is attacker-controlled (any visitor to the local server),
+// so every field is type- and length-checked before it is spliced into a
+// Gemini prompt or echoed back, instead of trusted as-is.
+const MAX_SHORT_FIELD = 200;
+const MAX_NOTES_FIELD = 2000;
+const MAX_CHAT_MESSAGE = 4000;
+const MAX_CHAT_HISTORY = 40;
+
+function cleanShortString(value: unknown, maxLen: number, fallback: string): string {
+  if (typeof value !== 'string') return fallback;
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  return trimmed.slice(0, maxLen);
+}
+
+function validateScenarioBody(body: any): { error: string } | {
+  theme: string;
+  genre: string;
+  customThemeName: string;
+  difficulty: string;
+  vector: string;
+  secondaryVector: string;
+  targetOS: string;
+  flagPrefix: string;
+  customNotes: string;
+} {
+  if (!body || typeof body !== 'object') {
+    return { error: 'Cuerpo de la petición inválido.' };
+  }
+  const allowedDifficulties = ['Easy', 'Medium', 'Hard', 'Insane'];
+  const difficulty = typeof body.difficulty === 'string' && allowedDifficulties.includes(body.difficulty)
+    ? body.difficulty
+    : 'Medium';
+  return {
+    theme: cleanShortString(body.theme, MAX_SHORT_FIELD, 'mr-robot'),
+    genre: cleanShortString(body.genre, MAX_SHORT_FIELD, 'tv_series'),
+    customThemeName: cleanShortString(body.customThemeName, MAX_SHORT_FIELD, ''),
+    difficulty,
+    vector: cleanShortString(body.vector, MAX_SHORT_FIELD, 'SSTI (Server-Side Template Injection)'),
+    secondaryVector: cleanShortString(body.secondaryVector, MAX_SHORT_FIELD, 'SUID Custom Binary'),
+    targetOS: cleanShortString(body.targetOS, MAX_SHORT_FIELD, 'Debian 12 Bookworm'),
+    flagPrefix: cleanShortString(body.flagPrefix, 40, 'CTF'),
+    customNotes: cleanShortString(body.customNotes, MAX_NOTES_FIELD, ''),
+  };
+}
+
+app.post('/api/generate-scenario', aiRateLimiter, async (req, res) => {
   try {
+    const validated = validateScenarioBody(req.body);
+    if ('error' in validated) {
+      return res.status(400).json({ success: false, error: validated.error });
+    }
     const {
-      theme = 'mr-robot',
-      genre = 'tv_series',
-      customThemeName = '',
-      difficulty = 'Medium',
-      vector = 'SSTI (Server-Side Template Injection)',
-      secondaryVector = 'SUID Custom Binary',
-      targetOS = 'Debian 12 Bookworm',
-      flagPrefix = 'CTF',
-      customNotes = '',
-    } = req.body;
+      theme,
+      genre,
+      customThemeName,
+      difficulty,
+      vector,
+      secondaryVector,
+      targetOS,
+      flagPrefix,
+      customNotes,
+    } = validated;
 
     const ai = getGeminiClient();
 
@@ -1073,21 +1160,31 @@ Return a valid JSON object strictly matching this TypeScript structure:
     { "id": "h5", "level": 2, "title": "Herramienta de Auditoría Local", "category": "privesc", "text": "Comando o ruta del sistema clave para inspeccionar." },
     { "id": "h6", "level": 3, "title": "Vector de Root", "category": "privesc", "text": "Técnica precisa de elevación de privilegios." }
   ],
-  "provisionScript": "#!/usr/bin/env bash\\n# Complete bash setup script with comments...\\n",
-  "dockerfile": "FROM debian:12-slim\\n# Complete runnable Dockerfile...\\n",
-  "dockerCompose": "version: '3.8'\\nservices:\\n  vulnerable_node:\\n    build: .\\n    container_name: ctf_target\\n    hostname: ctf_target\\n    ports:\\n      - '8080:80'\\n      - '2222:22'\\n    networks:\\n      ctf_isolated_net:\\n        ipv4_address: 10.10.110.42\\n    restart: unless-stopped\\nnetworks:\\n  ctf_isolated_net:\\n    driver: bridge\\n    ipam:\\n      config:\\n        - subnet: 10.10.110.0/24\\n",
+  "provisionScript": "#!/usr/bin/env bash\\n# Complete bash setup script with comments. Must end by exec-ing (or otherwise keeping alive) the actual vulnerable service/process so the container does not exit immediately.\\n",
+  "dockerfile": "FROM debian:12-slim\\n# Complete runnable Dockerfile that actually installs and starts the vulnerable service described in openPorts...\\n",
+  "dockerCompose": "version: '3.8'\\nservices:\\n  vulnerable_node:\\n    build: .\\n    container_name: ctf_target\\n    hostname: ctf_target\\n    ports:\\n      - '127.0.0.1:8080:80'\\n    networks:\\n      ctf_isolated_net:\\n        ipv4_address: 10.10.110.42\\n    cap_drop: ['ALL']\\n    security_opt: ['no-new-privileges:true']\\n    deploy:\\n      resources:\\n        limits:\\n          cpus: '1.0'\\n          memory: 1024M\\nnetworks:\\n  ctf_isolated_net:\\n    driver: bridge\\n    ipam:\\n      config:\\n        - subnet: 10.10.110.0/24\\n",
   "walkthrough": "# Complete Markdown writeup detailing Recon, Initial Foothold, Privilege Escalation, and Mitigation/Hardening Guidance."
 }
 
 CRITICAL RULES:
 1. Provide at least 6 gradual hints: 3 for initial foothold (Level 1 subtle, Level 2 tactical, Level 3 direct vector) and 3 for privilege escalation.
-2. The docker-compose.yml must be completely runnable with 'docker compose up' or 'docker-compose up', defining isolated bridge network 'ctf_isolated_net' and container name.
-3. Return ONLY pure JSON.
+2. The docker-compose.yml must be completely runnable with 'docker compose up' or 'docker-compose up', defining isolated bridge network 'ctf_isolated_net' and container name. Every port listed in openPorts MUST be backed by a real, running service in the Dockerfile/provisionScript — never advertise a port that nothing is listening on.
+3. Docker security (non-negotiable, these are hard-rejected server-side if violated): NEVER use 'privileged: true', 'network_mode: host', 'pid: host', 'ipc: host', or mount host paths/the Docker socket as volumes. Bind every published port to 127.0.0.1 (e.g. '127.0.0.1:8080:80'), never '0.0.0.0' or a bare port. Always set 'cap_drop: [ALL]'. Only add 'security_opt: [no-new-privileges:true]' and avoid any 'cap_add' when the privilege-escalation vector does NOT depend on SUID/SGID binaries or sudo; when it DOES (e.g. the secondary vector is SUID/Path Hijacking, sudo NOPASSWD, or a capability like cap_setuid), omit 'no-new-privileges' entirely and instead add only the minimal capabilities the exploit needs via 'cap_add' (choose only from: CHOWN, DAC_OVERRIDE, FOWNER, FSETID, KILL, SETGID, SETUID, SETPCAP, SETFCAP, NET_BIND_SERVICE, SYS_CHROOT, AUDIT_WRITE) — never 'ALL' or capabilities like SYS_ADMIN/SYS_PTRACE/SYS_MODULE/NET_ADMIN. Always set resource limits (deploy.resources.limits.cpus and memory).
+4. Return ONLY pure JSON.
 `;
 
     let generatedData: any = null;
+    let usedFallback = false;
+    let fallbackReason = '';
+
+    const apiKeyConfigured = Boolean(
+      process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim() !== '' && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY'
+    );
 
     try {
+      if (!apiKeyConfigured) {
+        throw new Error('No hay GEMINI_API_KEY configurada en el servidor.');
+      }
       const selectedModel = await getBestAvailableModel(ai);
       const response = await ai.models.generateContent({
         model: selectedModel,
@@ -1101,7 +1198,20 @@ CRITICAL RULES:
       const responseText = response.text || '';
       const cleanJson = responseText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
       generatedData = JSON.parse(cleanJson);
+
+      // Nunca se confía a ciegas en el docker-compose que devuelve la IA: si
+      // pide privileged/host networking/montar rutas del host/capabilities
+      // peligrosas, se rechaza la generación completa y se cae al catálogo
+      // offline en vez de servir una configuración insegura.
+      const composeIssues = findDockerComposeSecurityIssues(generatedData?.dockerCompose);
+      if (composeIssues.length > 0) {
+        throw new Error(`El docker-compose generado por la IA fue rechazado por seguridad: ${composeIssues.join(' ')}`);
+      }
     } catch (apiError: any) {
+      usedFallback = true;
+      fallbackReason = apiKeyConfigured
+        ? `La IA de Gemini no respondió correctamente (${apiError?.message || 'error desconocido'}). Se usó un escenario del catálogo offline.`
+        : 'No hay GEMINI_API_KEY configurada. Se usó un escenario del catálogo offline (Modo Offline).';
       console.warn('Gemini API scenario generation fallback to curated preset:', apiError?.message);
       const presetKey = theme in DEFAULT_PRESETS ? theme : 'mr-robot';
       const preset = DEFAULT_PRESETS[presetKey];
@@ -1164,11 +1274,11 @@ CRITICAL RULES:
             text: `Eleva privilegios a superusuario para acceder a ${preset.rootFlagPath}.`,
           },
         ],
-        openPorts: [
-          { port: 22, service: 'SSH', version: 'OpenSSH 9.2p1', purpose: 'Acceso administrativo restringido' },
-          { port: 80, service: 'HTTP', version: 'Flask/Gunicorn + Nginx', purpose: 'Portal temático vulnerable' },
-          { port: 445, service: 'SMB', version: 'Samba 4.17 (Anon Read)', purpose: 'Almacén de logs desprotegido' },
-        ],
+        // Este fallback genérico (sin clave de Gemini o con la API caída) NO
+        // instala ningún servicio de red real: solo crea un usuario y dos
+        // ficheros de bandera accesibles vía "docker exec". No se anuncian
+        // puertos abiertos para no inducir a error en el reconocimiento.
+        openPorts: [],
         topology: {
           nodes: [
             { id: 'attacker', label: 'Kali Linux (10.10.14.5)', type: 'attacker', role: 'Estudiante / Red Team' },
@@ -1178,15 +1288,18 @@ CRITICAL RULES:
           ],
           links: [
             { from: 'attacker', to: 'firewall', proto: 'VPN WireGuard', desc: 'Acceso a laboratorio aislado' },
-            { from: 'firewall', to: 'target', proto: 'TCP: 22, 80, 445', desc: 'Superficie de ataque expuesta' },
+            { from: 'firewall', to: 'target', proto: 'docker exec', desc: 'Sin servicio de red: acceso de práctica vía shell del contenedor' },
             { from: 'target', to: 'vault', proto: 'IPC / Sudo / SUID', desc: 'Ruta de escalada local' },
           ],
         },
         provisionScript: `#!/usr/bin/env bash
-# NetPhantom CTF Automated Provisioning Script
+# NetPhantom CTF Automated Provisioning Script (plantilla genérica de reserva,
+# sin IA disponible). No expone ningún servicio de red: usa
+# "docker exec -it ${preset.codename.toLowerCase()} bash" para practicar la
+# búsqueda de banderas y la escalada de privilegios local.
 set -euo pipefail
 echo "[*] Initializing NetPhantom CTF Environment: ${preset.codename}"
-apt-get update -y && apt-get install -y python3 python3-pip python3-venv sudo curl net-tools procps supervisor
+apt-get update -y && apt-get install -y python3 python3-pip python3-venv sudo curl net-tools procps
 useradd -m -s /bin/bash player
 echo "player:Password123!" | chpasswd
 mkdir -p /opt/vulnerable_app
@@ -1194,7 +1307,8 @@ echo "${preset.userFlag}" > ${preset.userFlagPath}
 chmod 640 ${preset.userFlagPath}
 echo "${preset.rootFlag}" > ${preset.rootFlagPath}
 chmod 600 ${preset.rootFlagPath}
-echo "[+] Lab provisioned successfully."
+echo "[+] Lab provisioned successfully. Container will stay up for 'docker exec' access."
+exec sleep infinity
 `,
         dockerfile: `FROM debian:12-slim
 ENV DEBIAN_FRONTEND=noninteractive
@@ -1203,7 +1317,6 @@ RUN useradd -m -s /bin/bash player
 WORKDIR /app
 COPY provision.sh /app/provision.sh
 RUN chmod +x /app/provision.sh
-EXPOSE 80 22 445
 CMD ["/app/provision.sh"]
 `,
         dockerCompose: `version: '3.8'
@@ -1213,14 +1326,11 @@ services:
     build: .
     container_name: ${preset.codename.toLowerCase()}
     hostname: ${preset.codename.toLowerCase()}
-    ports:
-      - "8080:80"
-      - "2222:22"
-      - "4455:445"
     networks:
       ctf_isolated_net:
         ipv4_address: ${preset.ip}
-    restart: unless-stopped
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
     deploy:
       resources:
         limits:
@@ -1281,6 +1391,8 @@ Elevación a superusuario para leer ${preset.rootFlagPath}: ${preset.rootFlag}.
     return res.json({
       success: true,
       scenario: generatedData,
+      fallback: usedFallback,
+      ...(usedFallback ? { fallbackReason } : {}),
     });
   } catch (error: any) {
     console.error('Error generating scenario:', error);
@@ -1292,9 +1404,27 @@ Elevación a superusuario para leer ${preset.rootFlagPath}: ${preset.rootFlag}.
 });
 
 // Route: AI CTF Mentor Multi-turn Chat
-app.post('/api/chat', async (req, res) => {
+app.post('/api/chat', aiRateLimiter, async (req, res) => {
   try {
-    const { messages = [], role = 'mentor', model = 'gemini-3.5-flash' } = req.body;
+    const { role = 'mentor', model = 'gemini-3.5-flash' } = req.body || {};
+    const rawMessages = req.body?.messages;
+
+    if (rawMessages !== undefined && !Array.isArray(rawMessages)) {
+      return res.status(400).json({ success: false, error: '"messages" debe ser un array.' });
+    }
+    if (Array.isArray(rawMessages) && rawMessages.length > MAX_CHAT_HISTORY) {
+      return res.status(400).json({ success: false, error: `El historial de chat admite como máximo ${MAX_CHAT_HISTORY} mensajes.` });
+    }
+
+    const messages = (Array.isArray(rawMessages) ? rawMessages : [])
+      .filter((m: any) => m && typeof m === 'object' && typeof m.content === 'string' && m.content.trim().length > 0)
+      .map((m: any) => ({
+        role: m.role === 'user' ? 'user' : 'model',
+        content: String(m.content).slice(0, MAX_CHAT_MESSAGE),
+      }));
+
+    const allowedRoles = ['mentor', 'provisioner', 'auditor', 'hint_crafter'];
+    const safeRole = typeof role === 'string' && allowedRoles.includes(role) ? role : 'mentor';
 
     const roleSystemInstructions: Record<string, string> = {
       mentor: `Eres un Maestro y Diseñador Senior de Escenarios CTF (Capture The Flag).
@@ -1312,7 +1442,7 @@ Tu tarea es generar pistas en 3 niveles escalonados cuando el usuario te plantee
 Responde siempre con este formato estructurado en español.`,
     };
 
-    const systemInstruction = roleSystemInstructions[role] || roleSystemInstructions['mentor'];
+    const systemInstruction = roleSystemInstructions[safeRole];
 
     const ai = getGeminiClient();
 
@@ -1321,8 +1451,8 @@ Responde siempre con este formato estructurado en español.`,
       targetModel = await getBestAvailableModel(ai, 'pro');
     }
 
-    const contents = messages.map((m: { role: string; content: string }) => ({
-      role: m.role === 'user' ? 'user' : 'model',
+    const contents = messages.map((m) => ({
+      role: m.role,
       parts: [{ text: m.content }],
     }));
 
@@ -1359,20 +1489,28 @@ Responde siempre con este formato estructurado en español.`,
 });
 
 // Route: Generate Machine Theme Art & Poster via gemini-3-pro-image-preview
-app.post('/api/generate-machine-art', async (req, res) => {
+const MAX_ART_PROMPT = 2000;
+const VALID_ASPECT_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4'];
+
+app.post('/api/generate-machine-art', aiRateLimiter, async (req, res) => {
   try {
     const {
       prompt,
       imageSize = '1K',
       aspectRatio = '1:1',
-    } = req.body;
+    } = req.body || {};
 
-    if (!prompt) {
-      return res.status(400).json({ error: 'Prompt is required' });
+    if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+      return res.status(400).json({ success: false, error: 'El campo "prompt" es obligatorio y debe ser texto.' });
     }
+    if (prompt.length > MAX_ART_PROMPT) {
+      return res.status(400).json({ success: false, error: `El "prompt" admite como máximo ${MAX_ART_PROMPT} caracteres.` });
+    }
+    const safePrompt = prompt.trim();
 
     const validSizes = ['1K', '2K', '4K'];
-    const chosenSize = validSizes.includes(imageSize) ? imageSize : '1K';
+    const chosenSize = typeof imageSize === 'string' && validSizes.includes(imageSize) ? imageSize : '1K';
+    const chosenAspectRatio = typeof aspectRatio === 'string' && VALID_ASPECT_RATIOS.includes(aspectRatio) ? aspectRatio : '1:1';
 
     const ai = getGeminiClient();
 
@@ -1383,11 +1521,11 @@ app.post('/api/generate-machine-art', async (req, res) => {
       response = await ai.models.generateContent({
         model: 'gemini-3-pro-image-preview',
         contents: {
-          parts: [{ text: prompt }],
+          parts: [{ text: safePrompt }],
         },
         config: {
           imageConfig: {
-            aspectRatio: aspectRatio as any,
+            aspectRatio: chosenAspectRatio as any,
             imageSize: chosenSize as any,
           },
         },
@@ -1398,11 +1536,11 @@ app.post('/api/generate-machine-art', async (req, res) => {
       response = await ai.models.generateContent({
         model: 'gemini-3.1-flash-image',
         contents: {
-          parts: [{ text: prompt }],
+          parts: [{ text: safePrompt }],
         },
         config: {
           imageConfig: {
-            aspectRatio: aspectRatio as any,
+            aspectRatio: chosenAspectRatio as any,
             imageSize: chosenSize as any,
           },
         },
@@ -1429,7 +1567,7 @@ app.post('/api/generate-machine-art', async (req, res) => {
       imageUrl,
       modelUsed,
       imageSize: chosenSize,
-      aspectRatio,
+      aspectRatio: chosenAspectRatio,
     });
   } catch (error: any) {
     console.error('Image generation error:', error);
@@ -1482,8 +1620,11 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server listening on http://0.0.0.0:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`Server listening on http://${HOST}:${PORT}`);
+    if (HOST === '0.0.0.0' || HOST === '::') {
+      console.warn('[AVISO] El servidor escucha en todas las interfaces de red. Úsalo solo si sabes lo que haces.');
+    }
   });
 }
 

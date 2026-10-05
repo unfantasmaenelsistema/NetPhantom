@@ -1,4 +1,5 @@
 import { CTFScenario } from '../types';
+import { escapeHtml } from './htmlEscape';
 
 export interface CertificateData {
   studentName: string;
@@ -21,7 +22,17 @@ export async function computeCertificateHash(
 }
 
 export function generateCertificateHtml(data: CertificateData): string {
-  const { studentName, scenario, dateStr, serialNumber, sha256Hash } = data;
+  const studentName = escapeHtml(data.studentName);
+  const scenario = data.scenario;
+  const dateStr = escapeHtml(data.dateStr);
+  const serialNumber = escapeHtml(data.serialNumber);
+  const sha256Hash = escapeHtml(data.sha256Hash);
+  const codename = escapeHtml(scenario.codename || '');
+  const themeName = escapeHtml(scenario.themeName || '');
+  const difficultyLabel = escapeHtml(scenario.difficulty || '');
+  const ip = escapeHtml(scenario.ip || '');
+  const userFlagPreview = escapeHtml((scenario.userFlag || '').slice(0, 10));
+  const rootFlagPreview = escapeHtml((scenario.rootFlag || '').slice(0, 10));
 
   const difficultyColors: Record<string, { badgeBg: string; text: string; border: string }> = {
     Easy: { badgeBg: '#064e3b', text: '#34d399', border: '#059669' },
@@ -37,7 +48,7 @@ export function generateCertificateHtml(data: CertificateData): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Certificado Oficial CTF - ${studentName} - ${scenario.codename}</title>
+  <title>Certificado Oficial CTF - ${studentName} - ${codename}</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800;900&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap');
 
@@ -332,6 +343,19 @@ export function generateCertificateHtml(data: CertificateData): string {
       color: #38bdf8;
     }
 
+    .disclaimer-note {
+      grid-column: 1 / -1;
+      text-align: center;
+      font-family: 'Inter', sans-serif;
+      font-size: 6.5px;
+      color: #94a3b8;
+      margin-top: 3px;
+      line-height: 1.4;
+      max-width: 620px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
     /* Print media query - forces exact single sheet */
     @media print {
       @page {
@@ -393,7 +417,7 @@ export function generateCertificateHtml(data: CertificateData): string {
       <h1 class="title-diploma">Certificado de Superación</h1>
       <div class="subtitle-award">HACKING ÉTICO &bull; SEGURIDAD OFENSIVA &bull; AUDITORÍA TÉCNICA</div>
 
-      <p class="recipient-intro">Se certifica formalmente que el auditor / estudiante</p>
+      <p class="recipient-intro">Diploma autoemitido de práctica que acredita que el auditor / estudiante</p>
       <div class="recipient-name">${studentName}</div>
 
       <p class="achievement-description">
@@ -401,16 +425,16 @@ export function generateCertificateHtml(data: CertificateData): string {
       </p>
 
       <div class="machine-badge-box">
-        <span class="machine-codename">${scenario.themeName} (${scenario.codename})</span>
-        <span class="machine-difficulty">Dificultad: ${scenario.difficulty}</span>
-        <span class="serial-tag">IP: ${scenario.ip}</span>
+        <span class="machine-codename">${themeName} (${codename})</span>
+        <span class="machine-difficulty">Dificultad: ${difficultyLabel}</span>
+        <span class="serial-tag">IP: ${ip}</span>
       </div>
 
       <div class="flags-validated-tag">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="20 6 9 17 4 12"></polyline>
         </svg>
-        <span>Banderas Verificadas: user.txt (${scenario.userFlag.slice(0, 10)}...) y root.txt (${scenario.rootFlag.slice(0, 10)}...)</span>
+        <span>Banderas Verificadas: user.txt (${userFlagPreview}...) y root.txt (${rootFlagPreview}...)</span>
       </div>
     </div>
 
@@ -423,19 +447,23 @@ export function generateCertificateHtml(data: CertificateData): string {
       </div>
 
       <div class="cyber-seal">
-        <div class="seal-text">VERIFIED</div>
+        <div class="seal-text">AUTOEMITIDO</div>
         <div class="seal-icon">🛡️</div>
         <div class="seal-text">NETPHANTOM</div>
       </div>
 
       <div class="signature-block">
         <div class="sig-line"></div>
-        <div class="sig-name">Fecha de Validación</div>
+        <div class="sig-name">Fecha de Emisión</div>
         <div class="sig-title">${dateStr}</div>
       </div>
 
       <div class="hash-ribbon">
-        Sello Criptográfico SHA-256: <strong>${sha256Hash}</strong>
+        Código de verificación (SHA-256, generado localmente): <strong>${sha256Hash}</strong>
+      </div>
+      <div class="disclaimer-note">
+        Diploma autoemitido de carácter formativo, generado localmente en tu navegador. No constituye una certificación
+        profesional oficial ni una acreditación de terceros: es un registro simbólico de práctica para tu propio seguimiento.
       </div>
     </div>
   </div>
@@ -469,27 +497,30 @@ export function printCertificateAsPdf(data: CertificateData): void {
   iframe.style.border = '0';
   iframe.style.opacity = '0';
   iframe.style.pointerEvents = 'none';
-  document.body.appendChild(iframe);
+  // No doc.write(): the certificate is handed to the iframe via srcdoc, and
+  // the iframe is sandboxed without 'allow-scripts', so the inline #print
+  // helper script embedded in the standalone download never runs here.
+  iframe.setAttribute('sandbox', 'allow-same-origin allow-modals');
+  iframe.srcdoc = html;
 
-  const doc = iframe.contentWindow?.document;
-  if (doc) {
-    doc.open();
-    doc.write(html);
-    doc.close();
-
+  iframe.onload = () => {
     // Allow Google Fonts to render before triggering print
     setTimeout(() => {
       try {
         iframe.contentWindow?.focus();
         iframe.contentWindow?.print();
       } catch (e) {
-        console.warn('Iframe print error, falling back to window.open:', e);
-        const win = window.open('', '_blank');
+        console.warn('Iframe print error, falling back to a new tab:', e);
+        const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const win = window.open(url, '_blank', 'noopener,noreferrer');
         if (win) {
-          win.document.write(html);
-          win.document.close();
-          win.focus();
-          setTimeout(() => win.print(), 500);
+          setTimeout(() => {
+            win.print();
+            URL.revokeObjectURL(url);
+          }, 500);
+        } else {
+          URL.revokeObjectURL(url);
         }
       } finally {
         setTimeout(() => {
@@ -499,7 +530,9 @@ export function printCertificateAsPdf(data: CertificateData): void {
         }, 2000);
       }
     }, 450);
-  }
+  };
+
+  document.body.appendChild(iframe);
 }
 
 /**

@@ -231,7 +231,7 @@ export const CertificateModal: React.FC<CertificateModalProps> = ({
                     const html = generateCertificateHtml(certificateData);
                     const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
                     const url = URL.createObjectURL(blob);
-                    window.open(url, '_blank');
+                    window.open(url, '_blank', 'noopener,noreferrer');
                   }}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors cursor-pointer shrink-0"
                   title="Abrir en pantalla completa en una nueva pestaña"

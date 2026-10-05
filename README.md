@@ -11,6 +11,25 @@ Diseñado por y para la comunidad de **[Un Fantasma En El Sistema](https://www.u
 
 ---
 
+## 🖼️ Capturas de Pantalla
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/01-overview.png" alt="Resumen del escenario: historia, vector de ataque, MITRE/OWASP y comprobación de banderas"></td>
+    <td><img src="docs/screenshots/02-docker-compose.png" alt="Pestaña Docker Compose con el docker-compose.yml generado"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/03-terminal.png" alt="Web Shell Playground: terminal simulada de reconocimiento y explotación"></td>
+    <td><img src="docs/screenshots/06-dashboard.png" alt="Mi Progreso: panel de nivel, XP e historial de laboratorios"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/04-hints.png" alt="Sistema de pistas graduales en 3 niveles con protección anti-spoiler"></td>
+    <td><img src="docs/screenshots/05-frameworks.png" alt="Alineación MITRE ATT&CK, OWASP Top 10 y calculadora CVSS v3.1"></td>
+  </tr>
+</table>
+
+---
+
 ## ✨ Características Principales
 
 * 📤 **Importador & Exportador de Retos (*Drag & Drop*)**: Diseñado para profesores, instructores y alumnos. Permite guardar la definición íntegra del reto en formato `.json` o `.yaml` e importar cualquier reto con solo arrastrar y soltar el archivo en la pantalla o pegando su contenido.
@@ -51,17 +70,26 @@ No necesitas conocimientos avanzados de terminal ni configurar variables a mano.
 
 ---
 
+## 📋 Requisitos
+
+* **Node.js** v20.19+ o v22.12+ (necesario para Vite 8; versiones más antiguas no son compatibles). Descárgalo en [nodejs.org](https://nodejs.org/).
+* **npm** (incluido con Node.js). El proyecto usa `npm`/`package-lock.json` como gestor único; no uses `bun`/`yarn`/`pnpm` para instalar.
+* **Docker Engine + Docker Compose v2** — opcional, solo si quieres desplegar en tu máquina los laboratorios vulnerables que NetPhantom genera o exporta. La propia interfaz (generar escenarios, pistas, informes, certificado) funciona sin Docker.
+* **Clave de Google Gemini** — opcional. Sin ella, NetPhantom funciona al 100% en **Modo Offline** con el catálogo de escenarios incluido (ver más abajo).
+
+---
+
 ## 🛠️ Puesta en Marcha Manual
 
 Si prefieres ejecutar los comandos manualmente:
 
 ```bash
 # 1. Clonar el repositorio
-git clone https://github.com/tu-usuario/netphantom-ctf.git
-cd netphantom-ctf
+git clone https://github.com/unfantasmaenelsistema/NetPhantom.git
+cd NetPhantom
 
-# 2. Instalar dependencias de Node.js
-npm install
+# 2. Instalar dependencias de Node.js (usa npm ci si existe package-lock.json)
+npm ci
 
 # 3. Crear el archivo de configuración a partir del ejemplo
 cp .env.example .env
@@ -73,7 +101,7 @@ cp .env.example .env
 npm run dev
 ```
 
-La aplicación estará disponible inmediatamente en `http://localhost:3000`.
+La aplicación estará disponible en `http://127.0.0.1:3000` (o el `PORT` que hayas configurado en `.env`).
 
 ---
 
@@ -128,14 +156,48 @@ Una vez diseñado o seleccionado un escenario en NetPhantom:
 
 ## 🔒 Arquitectura de Seguridad
 
-* **Sin claves en el frontend**: Siguiendo las directrices estrictas de seguridad de Google y OWASP, la clave API nunca se expone en la interfaz web ni en el almacenamiento del navegador del cliente (`localStorage`/`cookies`).
-* **Proxy de Servidor Seguro**: Todas las solicitudes a la IA se gestionan mediante rutas del backend (`/api/*`), manteniendo tus secretos a salvo de extensiones de navegador y ataques de inspección.
-* **Aislamiento de Contenedores**: Todos los entornos CTF se definen en redes puente (`bridge`) aisladas sin privilegios de red sobre tu máquina anfitriona.
+Esta sección describe **solo lo que el código garantiza hoy**, no aspiraciones. Si encuentras algo que no se cumple, abre un issue.
+
+* **Sin claves en el frontend**: la clave de Gemini solo vive en tu `.env` local y en el proceso del servidor; nunca se envía al navegador ni se guarda en `localStorage`/`cookies`. Todas las llamadas a la IA pasan por rutas del backend (`/api/*`).
+* **Servidor local, no expuesto por defecto**: el servidor escucha en `127.0.0.1` (localhost) salvo que fijes explícitamente `HOST=0.0.0.0` en tu `.env` — algo que la app nunca necesita para su uso normal.
+* **Límites básicos de abuso**: el tamaño del body JSON está limitado (`MAX_BODY_SIZE`, 1 MB por defecto) y las rutas que llaman a Gemini (`/api/generate-scenario`, `/api/chat`, `/api/generate-machine-art`) aplican un límite de peticiones por IP (20/min). Esto es una protección básica para uso local, no un WAF ni defensa frente a tráfico adversarial a gran escala.
+* **Exportaciones e importaciones saneadas**: los informes HTML, el certificado y los escenarios `.json`/`.yaml` importados escapan los valores dinámicos (nombre del alumno, banderas, pistas...) antes de inyectarlos en HTML, para evitar XSS al abrir un informe exportado o al importar un reto compartido por otra persona.
+* **Validación del `docker-compose.yml` generado o importado**: tanto la salida de Gemini como cualquier `.json`/`.yaml` que importes pasan por un validador (`src/utils/dockerSecurity.ts`) que rechaza `privileged: true`, `network_mode`/`pid`/`ipc: host`, montar rutas del host (incluido `/var/run/docker.sock`) y capabilities (`cap_add`) fuera de una lista mínima permitida. Si algo no pasa la validación, se sustituye por una plantilla segura (o se descarta la respuesta de la IA y se usa el catálogo offline) en vez de servir una configuración peligrosa.
+* **Puertos de laboratorio en localhost**: los `docker-compose.yml` que genera NetPhantom publican los puertos como `127.0.0.1:HOST:CONTENEDOR`, no `0.0.0.0`, así que las máquinas vulnerables no quedan expuestas a tu red local salvo que lo cambies tú mismo a propósito.
+
+### ⚠️ Lo que esta app NO garantiza
+
+* **Las máquinas CTF son deliberadamente vulnerables.** Están pensadas para ejecutarse en local, con Docker, en una máquina que tú controlas — nunca en un servidor compartido, en producción, ni accesible desde Internet.
+* No hay aislamiento reforzado tipo sandbox/gVisor/Kata frente a un *container breakout* sofisticado: la contención es la que ofrece Docker por defecto más los límites de capacidades que NetPhantom añade (`cap_drop: [ALL]` + el mínimo `cap_add` necesario cuando el reto lo exige), no una barrera infranqueable.
+* El rate limiting y el límite de body son una protección básica pensada para un único usuario local, no para exponer el servicio a terceros.
+* El certificado de superación es **autoemitido y generado en tu navegador**: no es una acreditación oficial ni de terceros (ver el propio diploma, que ya lo indica).
+
+---
+
+## ⚠️ Limitaciones Reales
+
+* **Solo 1 de los 16 escenarios del catálogo offline tiene un laboratorio Docker totalmente funcional** (`FSOCIETY_E_CORP_01`, inspirado en Mr. Robot). Los otros 15 son plantillas narrativas completas (historia, pistas, topología, banderas) pero su contenedor no instala ningún servicio explotable real — la interfaz los marca como **"Plantilla · sin servicio vulnerable"**. Puedes usarlos para practicar el flujo de la app (pistas, banderas, informe, certificado) o como punto de partida para montar tú el servicio.
+* Los escenarios generados con **IA (Gemini)** sí incluyen, por diseño del prompt, un `Dockerfile`/`provisionScript` que instala y arranca un servicio real — pero es contenido generado por un modelo de lenguaje: revísalo antes de confiar en él para una clase o evaluación.
+* El **certificado de superación es autoemitido**: se genera en tu navegador a partir de datos que tú mismo controlas (nombre, banderas validadas localmente). No es una acreditación oficial ni verificable por terceros.
+* El **rate limiting y el límite de tamaño de body** del servidor son una protección básica para uso local en un único equipo, no defensas pensadas para exponer el servicio a Internet o a múltiples usuarios no confiables.
+* NetPhantom **no se ha probado con Docker real durante esta revisión** (el entorno de desarrollo usado no tenía Docker disponible). Las validaciones de `docker-compose.yml` (ver `src/utils/dockerSecurity.ts`) se probaron a nivel de código, pero el despliegue real de los laboratorios generados no se verificó de extremo a extremo — pruébalo tú antes de usarlo en clase.
+
+## ✅ Uso Responsable
+
+NetPhantom genera **máquinas deliberadamente vulnerables** con fines educativos. Por favor:
+
+* Despliega los laboratorios **solo en local y en redes aisladas** (tu propio equipo, una VM o un entorno de laboratorio controlado) — nunca en un servidor compartido, en producción, ni expuesto a Internet.
+* No practiques técnicas de explotación contra sistemas que no sean tuyos o para los que no tengas autorización explícita.
+* Si eres instructor/a, revisa el contenido generado por IA antes de distribuirlo a tus alumnos: ni el guion narrativo ni el código de aprovisionamiento están auditados por un humano por defecto.
 
 ---
 
 ## 🌐 Créditos y Comunidad
 
 Desarrollado para la comunidad de entusiastas de la seguridad informática y el hacking ético:
-* **Web Oficial**: [https://www.unfantasmaenelsistema.com/](https://www.unfantasmaenelsistema.com/)
+* **Web Oficial**: [https://www.unfantasmaenelsistema.com](https://www.unfantasmaenelsistema.com)
+* **Tienda (GhostApps)**: [https://ghostore.unfantasmaenelsistema.com](https://ghostore.unfantasmaenelsistema.com)
+* **Academia**: [https://ghostacademy.unfantasmaenelsistema.com](https://ghostacademy.unfantasmaenelsistema.com)
 * **Canal y Recursos**: Seguridad Informática, CTFs, Análisis Forense, DevSecOps y Hacking Ético.
+* **Licencia**: [MIT](LICENSE)
+* **Seguridad**: ¿encontraste un problema de seguridad en la app? Consulta [SECURITY.md](SECURITY.md).
