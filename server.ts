@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 import { rateLimit } from 'express-rate-limit';
 import { findDockerComposeSecurityIssues } from './src/utils/dockerSecurity';
+import { repairInvalidJsonEscapes } from './src/utils/jsonRepair';
 
 dotenv.config();
 
@@ -1160,17 +1161,20 @@ Return a valid JSON object strictly matching this TypeScript structure:
     { "id": "h5", "level": 2, "title": "Herramienta de Auditoría Local", "category": "privesc", "text": "Comando o ruta del sistema clave para inspeccionar." },
     { "id": "h6", "level": 3, "title": "Vector de Root", "category": "privesc", "text": "Técnica precisa de elevación de privilegios." }
   ],
-  "provisionScript": "#!/usr/bin/env bash\\n# Complete bash setup script with comments. Must end by exec-ing (or otherwise keeping alive) the actual vulnerable service/process so the container does not exit immediately.\\n",
-  "dockerfile": "FROM debian:12-slim\\n# Complete runnable Dockerfile that actually installs and starts the vulnerable service described in openPorts...\\n",
-  "dockerCompose": "version: '3.8'\\nservices:\\n  vulnerable_node:\\n    build: .\\n    container_name: ctf_target\\n    hostname: ctf_target\\n    ports:\\n      - '127.0.0.1:8080:80'\\n    networks:\\n      ctf_isolated_net:\\n        ipv4_address: 10.10.110.42\\n    cap_drop: ['ALL']\\n    security_opt: ['no-new-privileges:true']\\n    deploy:\\n      resources:\\n        limits:\\n          cpus: '1.0'\\n          memory: 1024M\\nnetworks:\\n  ctf_isolated_net:\\n    driver: bridge\\n    ipam:\\n      config:\\n        - subnet: 10.10.110.0/24\\n",
+  "provisionScript": "#!/usr/bin/env bash\\nset -e\\n# Runtime-only: create users, write the vulnerable app, write the flags.\\n# apt packages are already installed by the Dockerfile's RUN step, not here.\\n# Start every daemon directly (see rule 5) and end by exec-ing the main\\n# service, or by backgrounding the rest and running 'exec tail -f /dev/null'.\\n",
+  "dockerfile": "FROM debian:12-slim\\nRUN apt-get update && apt-get install -y --no-install-recommends <every package provision.sh needs> && rm -rf /var/lib/apt/lists/*\\nCOPY provision.sh /provision.sh\\nRUN chmod +x /provision.sh\\nEXPOSE 80\\nCMD [\\"/provision.sh\\"]\\n# apt-get runs at build time (RUN, full privileges). provision.sh runs at\\n# container start (CMD), with the compose file's cap_drop/no-new-privileges\\n# already in effect - it must never apt-get install anything itself.",
+  "dockerCompose": "version: '3.8'\\nservices:\\n  vulnerable_node:\\n    build: .\\n    container_name: ctf_target\\n    hostname: ctf_target\\n    ports:\\n      - '127.0.0.1:8080:80'\\n    networks:\\n      ctf_isolated_net:\\n        ipv4_address: 10.10.110.42\\n    cap_drop: ['ALL']\\n    cap_add: ['CHOWN', 'FOWNER', 'DAC_OVERRIDE', 'SETUID', 'SETGID']\\n    security_opt: ['no-new-privileges:true']\\n    deploy:\\n      resources:\\n        limits:\\n          cpus: '1.0'\\n          memory: 1024M\\nnetworks:\\n  ctf_isolated_net:\\n    driver: bridge\\n    ipam:\\n      config:\\n        - subnet: 10.10.110.0/24\\n",
   "walkthrough": "# Complete Markdown writeup detailing Recon, Initial Foothold, Privilege Escalation, and Mitigation/Hardening Guidance."
 }
 
 CRITICAL RULES:
 1. Provide at least 6 gradual hints: 3 for initial foothold (Level 1 subtle, Level 2 tactical, Level 3 direct vector) and 3 for privilege escalation.
 2. The docker-compose.yml must be completely runnable with 'docker compose up' or 'docker-compose up', defining isolated bridge network 'ctf_isolated_net' and container name. Every port listed in openPorts MUST be backed by a real, running service in the Dockerfile/provisionScript — never advertise a port that nothing is listening on.
-3. Docker security (non-negotiable, these are hard-rejected server-side if violated): NEVER use 'privileged: true', 'network_mode: host', 'pid: host', 'ipc: host', or mount host paths/the Docker socket as volumes. Bind every published port to 127.0.0.1 (e.g. '127.0.0.1:8080:80'), never '0.0.0.0' or a bare port. Always set 'cap_drop: [ALL]'. Only add 'security_opt: [no-new-privileges:true]' and avoid any 'cap_add' when the privilege-escalation vector does NOT depend on SUID/SGID binaries or sudo; when it DOES (e.g. the secondary vector is SUID/Path Hijacking, sudo NOPASSWD, or a capability like cap_setuid), omit 'no-new-privileges' entirely and instead add only the minimal capabilities the exploit needs via 'cap_add' (choose only from: CHOWN, DAC_OVERRIDE, FOWNER, FSETID, KILL, SETGID, SETUID, SETPCAP, SETFCAP, NET_BIND_SERVICE, SYS_CHROOT, AUDIT_WRITE) — never 'ALL' or capabilities like SYS_ADMIN/SYS_PTRACE/SYS_MODULE/NET_ADMIN. Always set resource limits (deploy.resources.limits.cpus and memory).
+3. Docker security (non-negotiable, these are hard-rejected server-side if violated): NEVER use 'privileged: true', 'network_mode: host', 'pid: host', 'ipc: host', or mount host paths/the Docker socket as volumes. Bind every published port to 127.0.0.1 (e.g. '127.0.0.1:8080:80'), never '0.0.0.0' or a bare port. Always set 'cap_drop: [ALL]'. Because provisionScript almost always runs 'useradd'/'adduser'/'chpasswd'/'su' to create the low-privilege account, always add 'cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID]' as the baseline — without these, useradd fails ("failure while writing changes to /etc/gshadow") and su fails ("cannot set groups: Operation not permitted") even though the exact same commands work fine outside Docker. Set 'security_opt: [no-new-privileges:true]' UNLESS the privilege-escalation vector itself depends on SUID/SGID binaries, sudo NOPASSWD, or a capability like cap_setuid — in that case omit 'no-new-privileges' and add only the extra capability(ies) the exploit specifically needs, on top of the baseline (choose only from: FSETID, KILL, SETPCAP, SETFCAP, NET_BIND_SERVICE, SYS_CHROOT, AUDIT_WRITE) — never 'ALL' or capabilities like SYS_ADMIN/SYS_PTRACE/SYS_MODULE/NET_ADMIN. Always set resource limits (deploy.resources.limits.cpus and memory).
 4. Return ONLY pure JSON.
+5. The container has no init system: there is no PID 1 systemd, so 'systemctl' and '/etc/systemd/system/*.service' unit files will fail or silently do nothing. To start a daemon, either invoke it directly in the background (e.g. 'gunicorn ... &', 'cron', 'nginx -g "daemon off;" &') or, for packages that ship a sysvinit script (ssh, nginx, cron, postgresql, mysql), use 'service <name> start' — never 'systemctl'. The Dockerfile must run provisionScript as its CMD (or ENTRYPOINT), never as a 'RUN' step at build time: 'RUN' only executes while building the image, so anything it starts (including a trailing 'tail -f /dev/null') either never reaches the running container or hangs the build forever. End provisionScript by exec-ing the main service in the foreground, or by backgrounding every other service and finishing with 'exec tail -f /dev/null'. Install every apt/pip-at-OS-level package in the Dockerfile's own 'RUN apt-get install ...' step, never inside provisionScript: by the time provisionScript runs (container start, as CMD), the compose file's 'cap_drop: [ALL]' is already in effect, and apt-get's internal privilege-dropping to the '_apt' user needs CAP_SETUID/CAP_SETGID — it fails with "setgroups/setegid/seteuid ... Operation not permitted" under a dropped-capability runtime container even though it works fine at build time.
+6. On a debian/ubuntu base, 'pip install <package>' fails immediately with "externally-managed-environment" (PEP 668) unless you either pass '--break-system-packages' or install into a venv first ('python3 -m venv /opt/venv && /opt/venv/bin/pip install ...', then run the app with '/opt/venv/bin/python' or '/opt/venv/bin/gunicorn'). Prefer the venv approach. Never call a bare 'pip install' with neither.
+7. When invoking gunicorn, the module argument must be an importable module name ('app:app'), never a filesystem path. Use '--chdir /the/app/dir app:app' (or 'cd /the/app/dir && .../gunicorn app:app') — writing '/the/app/dir/app:app' makes gunicorn try to import a module literally named by that whole path and it fails with "No module named '/the/app/dir/app'".
 `;
 
     let generatedData: any = null;
@@ -1197,7 +1201,11 @@ CRITICAL RULES:
 
       const responseText = response.text || '';
       const cleanJson = responseText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
-      generatedData = JSON.parse(cleanJson);
+      try {
+        generatedData = JSON.parse(cleanJson);
+      } catch {
+        generatedData = JSON.parse(repairInvalidJsonEscapes(cleanJson));
+      }
 
       // Nunca se confía a ciegas en el docker-compose que devuelve la IA: si
       // pide privileged/host networking/montar rutas del host/capabilities

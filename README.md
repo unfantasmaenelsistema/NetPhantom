@@ -194,6 +194,28 @@ NetPhantom genera **máquinas deliberadamente vulnerables** con fines educativos
 
 ## 📝 Changelog
 
+**2026-10-06 — Los escenarios generados con IA no se podían desplegar de verdad**
+
+Se generaron varios escenarios reales con `GEMINI_API_KEY` (universo Alien/Weyland-Yutani, repetido varias veces) y se desplegaron con Docker real — no solo se comprobó que la generación "funcionara" (devolviera JSON válido), sino que el laboratorio resultante arrancara y fuera explotable. La primera generación falló ya en el propio parseo:
+
+```
+Gemini API scenario generation fallback to curated preset: Bad escaped character in JSON at position 5603
+```
+
+🐛 **Causa 1**: Gemini genera scripts bash/Dockerfile como valores de cadena JSON, y ocasionalmente deja una barra invertida no válida en JSON (p. ej. `\$PATH`), lo que rompe `JSON.parse()` y hace caer la generación al catálogo offline en silencio (con aviso honesto, pero sin IA real). **Corregido**: nueva función `repairInvalidJsonEscapes` (`src/utils/jsonRepair.ts`, con tests) que repara esos escapes antes de parsear.
+
+Con eso arreglado, la generación ya devolvía un escenario nuevo cada vez, pero **el laboratorio en sí no arrancaba** — se encontraron y arreglaron, todos verificados desplegando de verdad con `docker compose up --build`, cuatro problemas más en el *prompt* de Gemini (no en el código validador, que ya estaba bien):
+
+- 🐛 Usaba `systemctl` para arrancar servicios, pero el contenedor no tiene systemd real → se cuelga o no hace nada.
+- 🐛 Aprovisionaba como `RUN` en el `Dockerfile` (tiempo de build) en vez de `CMD` (arranque real) → el servicio nunca llegaba a estar corriendo, y un `tail -f /dev/null` ahí colgaba el build para siempre.
+- 🐛 `pip install` sin `--break-system-packages` ni venv → falla en Debian 12 por PEP 668.
+- 🐛 Una vez movido el aprovisionamiento a `CMD` (necesario para lo anterior), `apt-get install` en tiempo de arranque chocaba con `cap_drop: [ALL]` del `docker-compose.yml` (el sandboxing interno de `apt` necesita `CAP_SETUID`/`CAP_SETGID`) → **se corrigió instalando los paquetes en el propio `Dockerfile`** (build, sin restricciones) y dejando solo el arranque de servicios en el script de `CMD`.
+- 🐛 `useradd`/`adduser`/`su` (necesarios en *todo* escenario para crear el usuario sin privilegios) fallaban bajo `cap_drop: [ALL]` ("failure while writing changes to /etc/gshadow", "cannot set groups") → **se añadió un cap_add base** (`CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID`) que antes solo se concedía cuando el vector de escalada era SUID.
+
+**Verificado end-to-end tras todos los fixes**, generando y desplegando `LV_426_CRYO_OUTPOST` (SQLi real) de principio a fin: `docker compose up --build -d` arranca Flask+nginx+cron+ssh sin error, el SQLi ciego booleano responde distinto a `id=X' AND 1=1--` vs `id=X' AND 1=2--`, y ambas banderas reales están donde deben.
+
+---
+
 **2026-10-05 — El único laboratorio Docker real no sobrevivía a un reinicio**
 
 Se desplegó `FSOCIETY_E_CORP_01` con Docker real (`docker compose up --build`) para verificar end-to-end lo que el PR de endurecimiento no pudo probar por falta de Docker en su entorno. El contenedor moría en el primer arranque:
